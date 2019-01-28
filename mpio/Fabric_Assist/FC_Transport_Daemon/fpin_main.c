@@ -32,6 +32,7 @@
 #include <pthread.h>
 #include "fpin.h"
 
+struct fpin_global global;
 struct list_head els_marginal_list_head;
 
 /* 
@@ -43,12 +44,12 @@ struct list_head els_marginal_list_head;
 void *fpin_fabric_notification_receiver()
 {
 	int ret = -1; 
-	int maxfd = 0, fctxp_device_rfd = -1;
+	int maxfd = 0;
 	fd_set readfs;
 	fpin_payload_t *fpin_payload = NULL;
 	int fpin_payload_sz = sizeof(fpin_payload_t) + FC_PAYLOAD_MAXLEN;
 
-	if ((fctxp_device_rfd = open("/dev/fctxpd", O_RDONLY)) < 0) {
+	if ((global.fctxp_device_rfd = open("/dev/fctxpd", O_RDONLY)) < 0) {
 		FPIN_CLOG("NO Device found\n");
 		exit(0);
 	}
@@ -61,8 +62,8 @@ void *fpin_fabric_notification_receiver()
 
 	for ( ; ; ) {
 		FPIN_ILOG("Waiting for ELS...\n");
-		maxfd = fctxp_device_rfd + 1;
-		FD_SET(fctxp_device_rfd, &readfs);
+		maxfd = global.fctxp_device_rfd + 1;
+		FD_SET(global.fctxp_device_rfd, &readfs);
 		poll:
 		ret = select(maxfd, &readfs, NULL, NULL, NULL);
 		if (!ret) {
@@ -71,7 +72,7 @@ void *fpin_fabric_notification_receiver()
                         break;
 		}
 		
-		ret = read(fctxp_device_rfd, fpin_payload, fpin_payload_sz);
+		ret = read(global.fctxp_device_rfd, fpin_payload, fpin_payload_sz);
 		FPIN_DLOG("Got a new request\n");
 		if (ret < FC_PAYLOAD_MAXLEN) {
 			perror("read");
@@ -88,7 +89,7 @@ void *fpin_fabric_notification_receiver()
 		fpin_payload = NULL;
 	}
 
-	close(fctxp_device_rfd);
+	close(global.fctxp_device_rfd);
 }
 
 void dump_err(int func, int err) {

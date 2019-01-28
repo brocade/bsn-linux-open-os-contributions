@@ -28,7 +28,9 @@ typedef union wwn {
 
 struct els_marginal_list {
 	wwn_t hba_pwwn;
+	uint64_t hba_ctxt;
 	char payload[FC_PAYLOAD_MAXLEN];
+	int fct_fd;
 	struct list_head els_frame;
 };
 
