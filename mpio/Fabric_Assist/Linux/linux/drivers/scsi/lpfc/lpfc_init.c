@@ -45,7 +45,6 @@
 #include <scsi/scsi_transport_fc.h>
 #include <scsi/scsi_tcq.h>
 #include <scsi/fc/fc_fs.h>
-#include <scsi/fc/fc_transport_adapter.h>
 
 #include <linux/nvme-fc-driver.h>
 
@@ -99,12 +98,6 @@ static struct scsi_transport_template *lpfc_transport_template = NULL;
 static struct scsi_transport_template *lpfc_vport_transport_template = NULL;
 static DEFINE_IDR(lpfc_hba_index);
 #define LPFC_NVMET_BUF_POST 254
-struct list_head    fc_phba_list;
-struct fc_phba_list_info {
-	struct list_head    active_phba;
-	struct lpfc_hba *phba;
-	uint64_t wwn;
-};
 
 /**
  * lpfc_config_port_prep - Perform lpfc initialization prior to config port
@@ -12681,39 +12674,7 @@ static struct miscdevice lpfc_mgmt_dev = {
 	.name = "lpfcmgmt",
 	.fops = &lpfc_mgmt_fop,
 };
-int fc_add_fpin_phba_list (uint64_t wwpn, struct lpfc_hba *phba)
-{
-	struct fc_phba_list_info *plist;
-	plist = kmalloc(sizeof(*plist), GFP_ATOMIC);
-	if (!plist)
-		return -ENOMEM;
-	plist->phba = phba;
-	plist->wwn = wwpn;
-	list_add_tail(&plist->active_phba, &fc_phba_list);
-	return 0;
 
-}
-EXPORT_SYMBOL(fc_add_fpin_phba_list);
-int fc_flush_marginal_path(struct hba_port_wwn_info *port_info)
-{
-	struct fc_phba_list_info *plist;
-	struct lpfc_hba *phba;
-	struct list_head *p;
-	struct list_head *q;
-	uint64_t wwpn = 0;
-	list_for_each_safe (p, q, &fc_phba_list) {
-		plist = list_entry(p, struct fc_phba_list_info, active_phba);
-		phba = plist->phba;
-		memcpy(&wwpn, &phba->wwpn, sizeof(wwpn));
-		if (cpu_to_be64(wwpn) == port_info->initiator_hba_wwn) {
-			lpfc_sli_flush_fcp_rings(phba);
-			list_del(p);
-			kfree(plist);
-			return 1;
-		}
-	}
-	return 0;
-}
 /**
  * lpfc_init - lpfc module initialization routine
  *
@@ -12763,8 +12724,7 @@ lpfc_init(void)
 		fc_release_transport(lpfc_transport_template);
 		fc_release_transport(lpfc_vport_transport_template);
 	}
-	fc_register_els(fc_flush_marginal_path);
-	INIT_LIST_HEAD(&fc_phba_list);
+
 	return error;
 }
 

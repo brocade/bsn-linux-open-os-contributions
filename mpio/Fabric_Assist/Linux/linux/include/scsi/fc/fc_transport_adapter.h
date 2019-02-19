@@ -32,16 +32,9 @@ int update_els_frame(uint64_t pwwn, void *payload);
 typedef struct fpin_payload {
 	uint64_t hba_wwn;
 	uint32_t length; //2048 for now
-	char payload[FC_PAYLOAD_MAXLEN];
+	char payload[0];
 } fpin_payload_t;
 
-struct hba_port_wwn_info {
-	uint64_t initiator_hba_wwn;
-	uint64_t target_hba_wwn;
-	uint64_t hba_ctxt;
-};
 
-#define FCTXPD_FAILBACK_IO  _IOWR('N', 0x1, struct hba_port_wwn_info)
-int fc_register_els(int (*fc_reg_flush_pending_io)
-			(struct hba_port_wwn_info *port_info));
+
 #endif

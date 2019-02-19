@@ -950,7 +950,6 @@ fail:
 	return -ENXIO;
 }
 
-extern int fc_add_fpin_phba_list (uint64_t wwpn, struct lpfc_hba *phba);
 /**
  * lpfc_cmpl_els_flogi - Completion callback function for flogi
  * @phba: pointer to lpfc hba data structure.
@@ -986,7 +985,6 @@ lpfc_cmpl_els_flogi(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 	struct serv_parm *sp;
 	uint16_t fcf_index;
 	int rc;
-	uint64_t wwpn;
 
 	/* Check to see if link went down during discovery */
 	if (lpfc_els_chk_latt(vport)) {
@@ -1001,8 +999,6 @@ lpfc_cmpl_els_flogi(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 		"FLOGI cmpl:      status:x%x/x%x state:x%x",
 		irsp->ulpStatus, irsp->un.ulpWord[4],
 		vport->port_state);
-	 memcpy(&wwpn, &phba->wwpn, sizeof(wwpn));
-	//fc_add_fpin_phba_list(cpu_to_be64(wwpn), phba);
 
 	if (irsp->ulpStatus) {
 		/*
@@ -8209,10 +8205,17 @@ lpfc_els_unsol_buffer(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 		 * to be sent from here
 		 */
 		memcpy(&wwpn, &phba->wwpn, sizeof(wwpn));
-		fc_add_fpin_phba_list(wwpn, phba);
-		rc = update_els_frame(wwpn, payload);
-		if (rc < 0)
-			goto dropit;
+		if (payload) {
+			retries = 3;
+re_send:
+			if (retries) {
+				rc = update_els_frame(wwpn, payload);
+				if (rc < 0) {
+					retries--;
+					goto re_send;
+				}
+			}
+		}
 		break;
 	default:
 		lpfc_debugfs_disc_trc(vport, LPFC_DISC_TRC_ELS_UNSOL,

@@ -980,7 +980,7 @@ lpfc_new_scsi_buf(struct lpfc_vport *vport, int num_to_alloc)
 static struct lpfc_scsi_buf*
 lpfc_get_scsi_buf_s3(struct lpfc_hba *phba, struct lpfc_nodelist *ndlp)
 {
-	struct  lpfc_scsi_buf *lpfc_cmd = NULL;
+	struct  lpfc_scsi_buf * lpfc_cmd = NULL;
 	struct list_head *scsi_buf_list_get = &phba->lpfc_scsi_buf_list_get;
 	unsigned long iflag = 0;
 
@@ -3596,8 +3596,7 @@ lpfc_bg_scsi_prep_dma_buf(struct lpfc_hba *phba, struct lpfc_scsi_buf *lpfc_cmd)
  **/
 static void
 lpfc_send_scsi_error_event(struct lpfc_hba *phba, struct lpfc_vport *vport,
-		struct lpfc_scsi_buf *lpfc_cmd, struct lpfc_iocbq *rsp_iocb)
-{
+		struct lpfc_scsi_buf *lpfc_cmd, struct lpfc_iocbq *rsp_iocb) {
 	struct scsi_cmnd *cmnd = lpfc_cmd->pCmd;
 	struct fcp_rsp *fcprsp = lpfc_cmd->fcp_rsp;
 	uint32_t resp_info = fcprsp->rspStatus2;
@@ -4069,12 +4068,6 @@ lpfc_scsi_cmd_iocb_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *pIocbIn,
 			spin_unlock_irqrestore(&phba->hbalock, flags);
 			lpfc_worker_wake_up(phba);
 			break;
-		case IOSTAT_DRIVER_REJECT:
-			if (lpfc_cmd->result == IOERR_SLI_DOWN) {
-				printk(KERN_CRIT "#MMK Set cmd result as DID_NO_CONNECT\n");
-				cmd->result = DID_NO_CONNECT << 16;
-				break;
-			}
 		case IOSTAT_LOCAL_REJECT:
 		case IOSTAT_REMOTE_STOP:
 			if (lpfc_cmd->result == IOERR_ELXSEC_KEY_UNWRAP_ERROR ||
@@ -4465,8 +4458,8 @@ lpfc_info(struct Scsi_Host *host)
 	int len, link_speed = 0;
 	static char  lpfcinfobuf[384];
 
-	memset(lpfcinfobuf, 0, 384);
-	if (phba && phba->pcidev) {
+	memset(lpfcinfobuf,0,384);
+	if (phba && phba->pcidev){
 		strncpy(lpfcinfobuf, phba->ModelDesc, 256);
 		len = strlen(lpfcinfobuf);
 		snprintf(lpfcinfobuf + len,
@@ -4498,7 +4491,7 @@ lpfc_info(struct Scsi_Host *host)
  * This routine modifies fcp_poll_timer  field of @phba by cfg_poll_tmo.
  * The default value of cfg_poll_tmo is 10 milliseconds.
  **/
-static __inline__ void lpfc_poll_rearm_timer(struct lpfc_hba *phba)
+static __inline__ void lpfc_poll_rearm_timer(struct lpfc_hba * phba)
 {
 	unsigned long  poll_tmo_expires =
 		(jiffies + msecs_to_jiffies(phba->cfg_poll_tmo));
@@ -4514,7 +4507,7 @@ static __inline__ void lpfc_poll_rearm_timer(struct lpfc_hba *phba)
  *
  * This routine starts the fcp_poll_timer of @phba.
  **/
-void lpfc_poll_start_timer(struct lpfc_hba *phba)
+void lpfc_poll_start_timer(struct lpfc_hba * phba)
 {
 	lpfc_poll_rearm_timer(phba);
 }
@@ -5594,14 +5587,14 @@ lpfc_slave_alloc(struct scsi_device *sdev)
 		return 0;
 
 	/* Allow some exchanges to be available always to complete discovery */
-	if (total >= phba->cfg_hba_queue_depth - LPFC_DISC_IOCB_BUFF_COUNT) {
+	if (total >= phba->cfg_hba_queue_depth - LPFC_DISC_IOCB_BUFF_COUNT ) {
 		lpfc_printf_vlog(vport, KERN_WARNING, LOG_FCP,
 				 "0704 At limitation of %d preallocated "
 				 "command buffers\n", total);
 		return 0;
 	/* Allow some exchanges to be available always to complete discovery */
 	} else if (total + num_to_alloc >
-		phba->cfg_hba_queue_depth - LPFC_DISC_IOCB_BUFF_COUNT) {
+		phba->cfg_hba_queue_depth - LPFC_DISC_IOCB_BUFF_COUNT ) {
 		lpfc_printf_vlog(vport, KERN_WARNING, LOG_FCP,
 				 "0705 Allocation request of %d "
 				 "command buffers will exceed max of %d.  "
