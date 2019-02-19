@@ -1,7 +1,0 @@
-config FC_TRANSPORT_ADPATER
-	tristate "FC Transport adapter module"
-	depends on LIBFC
-	---help---
-	This driver provides an interface to the underlying HBA module
-	to receive ELS notifications from fabric through HBA and send
-	the same to the fctcprt daemon running in user space

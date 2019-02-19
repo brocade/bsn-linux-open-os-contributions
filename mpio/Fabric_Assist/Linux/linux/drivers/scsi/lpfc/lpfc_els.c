@@ -30,7 +30,6 @@
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_transport_fc.h>
-#include <scsi/fc/fc_transport_adapter.h>
 
 #include "lpfc_hw4.h"
 #include "lpfc_hw.h"
@@ -907,7 +906,7 @@ lpfc_cmpl_els_flogi_nport(struct lpfc_vport *vport, struct lpfc_nodelist *ndlp,
 		} else if (!NLP_CHK_NODE_ACT(ndlp)) {
 			ndlp = lpfc_enable_node(vport, ndlp,
 						NLP_STE_UNUSED_NODE);
-			if (!ndlp)
+			if(!ndlp)
 				goto fail;
 		}
 
@@ -1686,7 +1685,8 @@ lpfc_plogi_confirm_nport(struct lpfc_hba *phba, uint32_t *prsp,
 
 		if (!NLP_CHK_NODE_ACT(ndlp))
 			lpfc_drop_node(vport, ndlp);
-	} else {
+	}
+	else {
 		lpfc_printf_vlog(vport, KERN_INFO, LOG_ELS,
 			 "3180 PLOGI confirm SWAP: %x %x\n",
 			 new_ndlp->nlp_DID, keepDID);
@@ -2673,7 +2673,7 @@ lpfc_cmpl_els_logo(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 
 	/* Check to see if link went down during discovery */
 	if (ndlp->nlp_flag & NLP_TARGET_REMOVE) {
-		/* NLP_EVT_DEVICE_RM should unregister the RPI
+	        /* NLP_EVT_DEVICE_RM should unregister the RPI
 		 * which should abort all outstanding IOs.
 		 */
 		lpfc_disc_state_machine(vport, ndlp, cmdiocb,
@@ -3440,7 +3440,7 @@ lpfc_els_retry(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 			}
 			if ((phba->sli3_options & LPFC_SLI3_NPIV_ENABLED) &&
 			  (cmd == ELS_CMD_FDISC) &&
-			  (stat.un.b.lsRjtRsnCodeExp == LSEXP_OUT_OF_RESOURCE)) {
+			  (stat.un.b.lsRjtRsnCodeExp == LSEXP_OUT_OF_RESOURCE)){
 				lpfc_printf_vlog(vport, KERN_ERR, LOG_ELS,
 						 "0125 FDISC Failed (x%x). "
 						 "Fabric out of resources\n",
@@ -3663,7 +3663,8 @@ out_retry:
 			 "NPORT x%x: Out of Resources: Error:x%x/%x\n",
 			 cmd, did, irsp->ulpStatus,
 			 irsp->un.ulpWord[4]);
-	} else {
+	}
+	else {
 		lpfc_printf_vlog(vport, KERN_INFO, LOG_ELS,
 			 "0108 No retry ELS command x%x to remote "
 			 "NPORT x%x Retried:%d Error:x%x/%x\n",
@@ -3772,7 +3773,8 @@ lpfc_els_free_iocb(struct lpfc_hba *phba, struct lpfc_iocbq *elsiocb)
 				 */
 				ndlp->nlp_flag &= ~NLP_DEFER_RM;
 			}
-		} else
+		}
+		else
 			lpfc_nlp_put(ndlp);
 		elsiocb->context1 = NULL;
 	}
@@ -4035,7 +4037,8 @@ lpfc_cmpl_els_rsp(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 			if (ndlp->nlp_flag & NLP_RM_DFLT_RPI) {
 				mbox->mbox_flag |= LPFC_MBX_IMED_UNREG;
 				mbox->mbox_cmpl = lpfc_mbx_cmpl_dflt_rpi;
-			} else {
+			}
+			else {
 				mbox->mbox_cmpl = lpfc_mbx_cmpl_reg_login;
 				ndlp->nlp_prev_state = ndlp->nlp_state;
 				lpfc_nlp_set_state(vport, ndlp,
@@ -4922,7 +4925,8 @@ lpfc_els_disc_plogi(struct lpfc_vport *vport)
 	}
 	if (sentplogi) {
 		lpfc_set_disctmo(vport);
-	} else {
+	}
+	else {
 		spin_lock_irq(shost->host_lock);
 		vport->fc_flag &= ~FC_NLP_MORE;
 		spin_unlock_irq(shost->host_lock);
@@ -7850,9 +7854,6 @@ lpfc_els_unsol_buffer(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 	uint32_t cmd, did, newnode;
 	uint8_t rjt_exp, rjt_err = 0;
 	IOCB_t *icmd = &elsiocb->iocb;
-	int rc = -1;
-	int retries = 0;
-	uint64_t wwnn = 0, wwpn = 0;
 
 	if (!vport || !(elsiocb->context2))
 		goto dropit;
@@ -8198,24 +8199,6 @@ lpfc_els_unsol_buffer(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 		/* receive this due to exchange closed */
 		rjt_err = LSRJT_UNABLE_TPC;
 		rjt_exp = LSEXP_INVALID_OX_RX;
-		break;
-	case ELS_CMD_FPIN:
-		/* Received Multipath failover request */
-		/* TBD: Currently All future ELS notifications to fctxpd
-		 * to be sent from here
-		 */
-		memcpy(&wwpn, &phba->wwpn, sizeof(wwpn));
-		if (payload) {
-			retries = 3;
-re_send:
-			if (retries) {
-				rc = update_els_frame(wwpn, payload);
-				if (rc < 0) {
-					retries--;
-					goto re_send;
-				}
-			}
-		}
 		break;
 	default:
 		lpfc_debugfs_disc_trc(vport, LPFC_DISC_TRC_ELS_UNSOL,
@@ -9209,25 +9192,25 @@ lpfc_cmpl_fabric_iocb(struct lpfc_hba *phba, struct lpfc_iocbq *cmdiocb,
 	BUG_ON((cmdiocb->iocb_flag & LPFC_IO_FABRIC) != LPFC_IO_FABRIC);
 
 	switch (rspiocb->iocb.ulpStatus) {
-	case IOSTAT_NPORT_RJT:
-	case IOSTAT_FABRIC_RJT:
-		if (rspiocb->iocb.un.ulpWord[4] & RJT_UNAVAIL_TEMP) {
-			lpfc_block_fabric_iocbs(phba);
-		}
-		break;
+		case IOSTAT_NPORT_RJT:
+		case IOSTAT_FABRIC_RJT:
+			if (rspiocb->iocb.un.ulpWord[4] & RJT_UNAVAIL_TEMP) {
+				lpfc_block_fabric_iocbs(phba);
+			}
+			break;
 
-	case IOSTAT_NPORT_BSY:
-	case IOSTAT_FABRIC_BSY:
-		lpfc_block_fabric_iocbs(phba);
-		break;
-
-	case IOSTAT_LS_RJT:
-		stat.un.lsRjtError =
-			be32_to_cpu(rspiocb->iocb.un.ulpWord[4]);
-		if ((stat.un.b.lsRjtRsnCode == LSRJT_UNABLE_TPC) ||
-			(stat.un.b.lsRjtRsnCode == LSRJT_LOGICAL_BSY))
+		case IOSTAT_NPORT_BSY:
+		case IOSTAT_FABRIC_BSY:
 			lpfc_block_fabric_iocbs(phba);
-		break;
+			break;
+
+		case IOSTAT_LS_RJT:
+			stat.un.lsRjtError =
+				be32_to_cpu(rspiocb->iocb.un.ulpWord[4]);
+			if ((stat.un.b.lsRjtRsnCode == LSRJT_UNABLE_TPC) ||
+				(stat.un.b.lsRjtRsnCode == LSRJT_LOGICAL_BSY))
+				lpfc_block_fabric_iocbs(phba);
+			break;
 	}
 
 	BUG_ON(atomic_read(&phba->fabric_iocb_count) == 0);

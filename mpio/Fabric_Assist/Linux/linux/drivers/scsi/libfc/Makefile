@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 # $Id: Makefile
 
-
-obj-$(CONFIG_FC_TRANSPORT_ADPATER) += fc_transport_adapter.o
 obj-$(CONFIG_LIBFC) += libfc.o
 
 libfc-objs := \
