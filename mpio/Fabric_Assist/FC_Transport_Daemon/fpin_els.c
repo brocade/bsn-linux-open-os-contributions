@@ -236,9 +236,8 @@ fpin_els_extract_wwn(wwn_t *hba_pwwn, fpin_link_integrity_notification_t *li,
  *		5. Free the resources allocated.
  */
 int
-fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload, uint64_t hba_ctxt) {
+fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload) {
 	struct list_head dm_list_head, impacted_dev_list_head;
-	struct hba_port_wwn_info port_info;
 	fpin_link_integrity_request_els_t *fpin_req = NULL;
 	fpin_link_integrity_notification_t *li = NULL;
 	uint32_t els_cmd = 0;
@@ -272,15 +271,7 @@ fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload, uint64_t hba_ctxt) {
 			}
 
 			/* Fail the paths using multipath daemon */
-			FPIN_DLOG("Initiator Port WWN 0x%x%x\n",
-				htonl(hba_pwwn->words[0]), htonl(hba_pwwn->words[1]));
-			port_info.initiator_hba_wwn = (uint64_t) (((uint64_t)(htonl(hba_pwwn->words[0])) << 32) | htonl(hba_pwwn->words[1]));
-			FPIN_DLOG("Initiator Port WWN 0x%llx\n", port_info.initiator_hba_wwn);
-			//port_info.hba_ctxt = hba_ctxt;
-			port_info.hba_ctxt = 0;
-			port_info.target_hba_wwn = 0;
-			fpin_dm_fail_path(&dm_list_head, &impacted_dev_list_head,
-					&port_info);
+			fpin_dm_fail_path(&dm_list_head, &impacted_dev_list_head);
 
 			/* Free the WWNs list extracted from ELS recieved */
 			fpin_dm_free_dev(&impacted_dev_list_head);
@@ -351,7 +342,6 @@ void *fpin_els_li_consumer() {
 	char payload[FC_PAYLOAD_MAXLEN];
 	int retries = 0, ret = 0;
 	wwn_t hba_pwwn;
-	uint64_t hba_ctxt = 0;
 	struct els_marginal_list *els_marg;
 
 	for ( ; ; ) {
@@ -365,7 +355,6 @@ void *fpin_els_li_consumer() {
 							struct els_marginal_list, els_frame);
 			memset(payload, '\0', FC_PAYLOAD_MAXLEN);
 			hba_pwwn = els_marg->hba_pwwn;
-			hba_ctxt = els_marg->hba_ctxt;
 			memcpy(payload, els_marg->payload, FC_PAYLOAD_MAXLEN);
 			list_del(&els_marg->els_frame);
 			pthread_mutex_unlock(&fpin_li_mutex);
@@ -375,7 +364,7 @@ void *fpin_els_li_consumer() {
 			FPIN_ILOG("Got a new Payload buffer, processing it\n");
 			retries = 3;
 retry:
-			ret = fpin_process_els_frame(&hba_pwwn, payload, hba_ctxt);
+			ret = fpin_process_els_frame(&hba_pwwn, payload);
 			if (ret <= 0 ) {
 				FPIN_ELOG("ELS frame processing failed with ret %d\n", ret);
 				retries--;

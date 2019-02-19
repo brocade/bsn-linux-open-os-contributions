@@ -7,7 +7,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/ioctl.h>
 #include <linux/netlink.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -43,20 +42,6 @@
 #define PORT_ID_LEN		8
 #define UUID_LEN		128
 #define SYS_PATH_LEN	512
-
-/*IOCTL to fail all pending IOs on HBA port */
-struct hba_port_wwn_info {
-        uint64_t initiator_hba_wwn;
-        uint64_t target_hba_wwn;
-        uint64_t hba_ctxt;
-};
-
-#define FCTXPD_FAILBACK_IO  _IOWR('N', 0x1, struct hba_port_wwn_info)
-
-/* Global Structure to store all globals*/
-struct fpin_global {
-        int             fctxp_device_rfd;
-};
 
 struct impacted_dev_list
 {
@@ -100,8 +85,7 @@ struct wwn_list
 int fpin_fetch_dm_lun_data(struct wwn_list *list, struct list_head *dm_list_head,
 				struct list_head *impacted_dev_list_head);
 void fpin_dm_fail_path(struct list_head *dm_list_head,
-				struct list_head *impacted_dev_list_head,
-				struct hba_port_wwn_info *port_info);
+				struct list_head *impacted_dev_list_head);
 
 int fpin_populate_dm_lun(struct list_head *dm_list_head,
 			struct list_head *impacted_dev_list_head,

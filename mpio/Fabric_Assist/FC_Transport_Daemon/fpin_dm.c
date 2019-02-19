@@ -27,7 +27,7 @@
  */
 
 #include "fpin.h"
-extern struct fpin_global global;
+
 /*
  * Function:
  * 	fpin_insert_dm(struct list_head *dm_list_head, char *dm_name,
@@ -276,8 +276,7 @@ int fpin_dm_get_active_path_count(char *dm_status) {
  */
 void
 fpin_dm_fail_path(struct list_head *dm_list_head,
-			struct list_head *impacted_dev_list_head,
-			struct hba_port_wwn_info *port_info) {
+					struct list_head *impacted_dev_list_head) {
 	struct impacted_dev_list *temp = NULL;
 	char impacted_dm[DEV_NAME_LEN];
 	char cmd[100], dm_status[DM_PARAMS_SIZE];
@@ -305,10 +304,6 @@ fpin_dm_fail_path(struct list_head *dm_list_head,
 						snprintf(cmd, sizeof(cmd), "multipathd fail path %s",
 									temp->dev_name);
 						system(cmd);
-						FPIN_ILOG("Sending Initiator PWWN as 0x%llx\n", port_info->initiator_hba_wwn);
-						ret = ioctl(global.fctxp_device_rfd,
-							FCTXPD_FAILBACK_IO, port_info);
-						FPIN_ELOG("Got Ret as %d from IOCTL\n", ret);
 					} else {
 						FPIN_ELOG("Not Failing %s, not enough Active paths\n",
 							temp->dev_name);
