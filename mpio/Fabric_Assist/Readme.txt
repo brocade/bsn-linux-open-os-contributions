@@ -1,8 +1,5 @@
-Added FC_Transport_Daemon,  Linux directories under Fabric Assist.
-Inorder to run this feature we need to compile and install both the linux
-and FC_Transport_Daemon in this particular directory.
-And the steps to compile and install the same are available in the coressponding
-Readme.txt files 
+Added FC_Transport_Daemon,  Linux directories under Fabric Assist
+
 Fibre Channel Transport Services on Linux
 ###############################################
 	The purpose of this daemon is to add FC network intelligence in host and
@@ -18,9 +15,12 @@ Prerequisites
 	2. A Brocade FC network switch which sends the FPIN-LI ELS frame.
 	3. The FC HBA driver which passes through the FPIN-LI ELS sent from switch
 		to host.
-Note:This daemon cannot be launched without HBA driver support.
 
 Usage:
+	Once HBA driver is installed, it exposes a fctxp device which is used by the
+daemon to receive FPIN-LI notifications. This daemon cannot be launched without
+HBA driver support. 
+
 	Currently, the daemon suports only the marginal path failover. The FPIN-LI
 ELS structure is yet to be finalized and hence a temporary beacon ELS frame is
 used as a POC to test the feature.
@@ -49,18 +49,4 @@ Steps performed during daemon execution:
 	through HBA ports are stored. Only the targets in the list populated in
 	point 4, is parsed to get the sd* and dm-* information. A list of sd* which
 	are to be failed is populated here. 
-
-FC Transport Adpater:
-##################################################################################
-FC Transport Adpater is the module which interacts with both daemon and underlying HBA
-devices for receiving FPIN-LI ELS frames from underlying HBA device and sending the
-notifcations to the daemon regarding the same.
-All the hba modules needs to register with this FC Transport Adapter module for sending
-the ELS notifications to the daemon residing in user space .
-
-
-FC HBA changes:
-#######################################################################################
-Added FPIN ELS support and changes to register with the FC Transport Adpater for sending
-ELS notifications .
 
