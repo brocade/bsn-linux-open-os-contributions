@@ -4,11 +4,9 @@ After=multipathd.service
 Conflicts=shutdown.target
 
 [Service]
-Type=simple
-PIDFile=/run/fctxptd/fctxptd.pid
+Type=exec
 ExecStart=/sbin/fctxpd
 ExecReload=/sbin/fctxpd
-
 
 [Install]
 WantedBy=multi-user.target

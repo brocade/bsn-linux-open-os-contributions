@@ -198,7 +198,8 @@ fpin_els_extract_wwn(wwn_t *hba_pwwn, fpin_link_integrity_notification_t *li,
 
 	/* Update the wwn to list */
 	wwn_count = htonl(li->port_list.count);
-	snprintf(list->hba_wwn, sizeof(list->hba_wwn), "0x%x%x",
+	FPIN_DLOG("Got wwn count as %d\n", wwn_count);
+	snprintf(list->hba_wwn, sizeof(list->hba_wwn), "0x%08x%08x",
 			htonl(hba_pwwn->words[0]), htonl(hba_pwwn->words[1]));
 
 	currentPortListOffset_p = (wwn_t *)&(li->port_list.port_name_list);
@@ -238,6 +239,7 @@ fpin_els_extract_wwn(wwn_t *hba_pwwn, fpin_link_integrity_notification_t *li,
 int
 fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload) {
 	struct list_head dm_list_head, impacted_dev_list_head;
+	struct udev *udev = NULL;
 	fpin_link_integrity_request_els_t *fpin_req = NULL;
 	fpin_link_integrity_notification_t *li = NULL;
 	uint32_t els_cmd = 0;
@@ -252,8 +254,8 @@ fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload) {
 			INIT_LIST_HEAD(&list_of_wwn.impacted_ports.impacted_port_wwn_head);
 
 			/* Get the WWNs recieved from HBA firmware through ELS frame */
-			count = fpin_els_extract_wwn(hba_pwwn, &(fpin_req->li_desc),
-						&list_of_wwn);
+			count = fpin_els_extract_wwn(hba_pwwn,
+					&(fpin_req->linkIntegrityDesc), &list_of_wwn);
 			if (count <= 0) {
 				FPIN_ELOG("Could not find any WWNs, ret = %d\n", count);
 				return count;
@@ -262,16 +264,28 @@ fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload) {
 			/* Get the list of paths to be failed from WWNs aquired above */
 			INIT_LIST_HEAD(&dm_list_head);
 			INIT_LIST_HEAD(&impacted_dev_list_head);
+			udev = udev_new();
+			if (!udev) {
+				FPIN_ELOG("Can't create udev\n");
+				return(-1);
+			}
+
 			count = fpin_fetch_dm_lun_data(&list_of_wwn,
-					&dm_list_head, &impacted_dev_list_head);
+					&dm_list_head, &impacted_dev_list_head, udev);
 			if (count <= 0) {
 				FPIN_ELOG("Could not find any sd to fail, ret = %d\n", count);
 				fpin_els_free_wwn_list(&list_of_wwn);
+				udev_unref(udev);
 				return count;
 			}
 
+
 			/* Fail the paths using multipath daemon */
-			fpin_dm_fail_path(&dm_list_head, &impacted_dev_list_head);
+			FPIN_DLOG("Initiator Port WWN 0x%x%x\n",
+				htonl(hba_pwwn->words[0]), htonl(hba_pwwn->words[1]));
+			fpin_dm_fail_path(udev, &dm_list_head, &impacted_dev_list_head,
+					&list_of_wwn);
+			udev_unref(udev);
 
 			/* Free the WWNs list extracted from ELS recieved */
 			fpin_dm_free_dev(&impacted_dev_list_head);
@@ -302,8 +316,7 @@ fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload) {
 int
 fpin_handle_els_frame(fpin_payload_t *fpin_payload) {
 	uint32_t els_cmd = 0;
-	int ret = -1, retries = 3;
-
+	int ret = -1;
 
 	els_cmd = *(uint32_t *)fpin_payload->payload;
 	FPIN_ILOG("Got CMD in add as 0x%x\n", els_cmd);
@@ -311,13 +324,9 @@ fpin_handle_els_frame(fpin_payload_t *fpin_payload) {
 		case ELS_CMD_MPD:
 		case ELS_CMD_FPIN:
 			/*Push the Payload to FPIN frame queue. */
-retry_add:
 			ret = fpin_els_add_li_frame(fpin_payload);
 			if (ret != 0) {
-				retries --;
-				if (retries >= 0) {
-					goto retry_add;
-				}
+				FPIN_ELOG("Failed to process LI frame with error %d\n", ret);
 			}
 			break;
 
@@ -340,7 +349,7 @@ retry_add:
  */
 void *fpin_els_li_consumer() {
 	char payload[FC_PAYLOAD_MAXLEN];
-	int retries = 0, ret = 0;
+	int ret = 0;
 	wwn_t hba_pwwn;
 	struct els_marginal_list *els_marg;
 
@@ -362,15 +371,9 @@ void *fpin_els_li_consumer() {
 
 			/* Now finally process FPIN LI ELS Frame */
 			FPIN_ILOG("Got a new Payload buffer, processing it\n");
-			retries = 3;
-retry:
 			ret = fpin_process_els_frame(&hba_pwwn, payload);
 			if (ret <= 0 ) {
 				FPIN_ELOG("ELS frame processing failed with ret %d\n", ret);
-				retries--;
-				if (retries) {
-					goto retry;
-				}
 			}
 			pthread_mutex_lock(&fpin_li_mutex);			
 

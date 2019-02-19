@@ -30,9 +30,21 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <errno.h>
 #include "fpin.h"
+#include <linux/sockios.h>
+#include <linux/if.h>
+#include <linux/if_arp.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <linux/ethtool.h>
+#include <linux/if_vlan.h>
 
+
+struct fpin_global global;
 struct list_head els_marginal_list_head;
+static int fcm_fc_socket;
+#define DEF_RX_BUF_SIZE		4096
 
 /* 
  * Thread to listen for ELS frames from driver. on receiving the frame payload,
@@ -43,43 +55,46 @@ struct list_head els_marginal_list_head;
 void *fpin_fabric_notification_receiver()
 {
 	int ret = -1; 
-	int maxfd = 0, fctxp_device_rfd = -1;
+	int maxfd = 0;
 	fd_set readfs;
 	fpin_payload_t *fpin_payload = NULL;
 	int fpin_payload_sz = sizeof(fpin_payload_t) + FC_PAYLOAD_MAXLEN;
+	int fd, rc;
+	struct sockaddr_nl fc_local;
+	unsigned char buf[DEF_RX_BUF_SIZE];
+	int offset =0;
 
-	if ((fctxp_device_rfd = open("/dev/fctxpd", O_RDONLY)) < 0) {
-		FPIN_CLOG("NO Device found\n");
-		exit(0);
+	fd = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_SCSITRANSPORT);
+	if (fd < 0) {
+		FPIN_ELOG("fc socket error %d", fd);
+		pthread_exit(NULL);
 	}
-
+	memset(&fc_local, 0, sizeof(fc_local));
+	fc_local.nl_family = AF_NETLINK;
+	fc_local.nl_groups = ~0;
+	fc_local.nl_pid = getpid();
+	rc = bind(fd, (struct sockaddr *)&fc_local, sizeof(fc_local));
+	if (rc == -1) {
+		FPIN_ELOG("fc socket bind error %d\n", rc);
+		close(fd);
+		exit(EX_NOINPUT);
+	}
+	global.fctxp_device_rfd = fd;
 	fpin_payload = calloc(1, fpin_payload_sz);
 	if (fpin_payload == NULL) {
 		FPIN_CLOG(" No Mem to alloc\n");
-		pthread_exit(NULL);
+		exit(EX_IOERR);
 	}
 
 	for ( ; ; ) {
 		FPIN_ILOG("Waiting for ELS...\n");
-		maxfd = fctxp_device_rfd + 1;
-		FD_SET(fctxp_device_rfd, &readfs);
-		poll:
-		ret = select(maxfd, &readfs, NULL, NULL, NULL);
-		if (!ret) {
-			perror("read");
-                        FPIN_ELOG("select failed  ret = %d\n", ret);
-                        break;
-		}
-		
-		ret = read(fctxp_device_rfd, fpin_payload, fpin_payload_sz);
+		ret = read(global.fctxp_device_rfd, buf, DEF_RX_BUF_SIZE);
 		FPIN_DLOG("Got a new request\n");
-		if (ret < FC_PAYLOAD_MAXLEN) {
-			perror("read");
-			FPIN_ELOG("Read failed to read ret = %d 0x%x\n", ret,(char *)fpin_payload->payload);
-			 goto poll;
-		}
 
 		/* Push the frame to appropriate frame list */
+		offset= sizeof(struct nlmsghdr) + sizeof(struct fc_nl_event);
+		offset = offset - 4;
+		memcpy(fpin_payload, &buf[offset], fpin_payload_sz);
 		fpin_handle_els_frame(fpin_payload);
 	}
 
@@ -88,43 +103,9 @@ void *fpin_fabric_notification_receiver()
 		fpin_payload = NULL;
 	}
 
-	close(fctxp_device_rfd);
+	close(global.fctxp_device_rfd);
 }
 
-void dump_err(int func, int err) {
-	if (func == 1) {
-		switch(err) {
-			case EAGAIN:
-				FPIN_CLOG("Pthread_create: Insuffecient Resources\n");
-				break;
-			case EINVAL:
-				FPIN_CLOG("Pthread_create: Invalid settings in attr.\n");
-				break;
-			case EPERM:
-				FPIN_CLOG("Pthread_create: No permission to set the scheduling "
-							"policy and parameters specified in attr.\n");
-				break;
-			default:
-				FPIN_ELOG("Pthread_create: Unknown Error\n");
-				break;
-		}
-	} else if (func == 2) {
-		switch(err) {
-			case EDEADLK:
-				FPIN_CLOG("Pthread_join: A deadlock was detected.\n");
-				break;
-			case EINVAL:
-				FPIN_CLOG("Pthread_join: Thread is not joinable\n");
-				break;
-			case ESRCH:
-				FPIN_CLOG("Pthread_join: Thread ID not found.\n");
-				break;
-			default:
-				FPIN_ELOG("Pthread_create: Unknown Error\n");
-				break;
-		}
-	}
-}
 /*
  * FPIN daemon main(). Sleeps on read until an FPIn ELS frame is recieved from
  * HBA driver.
@@ -145,59 +126,29 @@ main(int argc, char *argv[])
 	setlogmask (LOG_UPTO (LOG_INFO));
 	openlog("FCTXPTD", LOG_PID, LOG_USER);
 	INIT_LIST_HEAD(&els_marginal_list_head);
-PCFRT:
 	ret = pthread_create(&fpin_receiver_thread_id, NULL,
 				fpin_fabric_notification_receiver, NULL);
 	if (ret != 0) {
-		FPIN_ELOG("Failed to create receiver thread, err %d, retrying\n", ret);
-		retries--;
-		if (retries)
-			goto PCFRT;
-
-		FPIN_CLOG("Failed to create receiver thread, err %d, exiting\n", ret);
-		dump_err(1, ret);
+		FPIN_CLOG("pthread_create failed receiver thread, err %d, %s\n", ret, strerror(errno));
 		exit (ret);
 	}
 
-	retries = 3;
-PCFCT:
 	ret = pthread_create(&fpin_consumer_thread_id, NULL,
 				fpin_els_li_consumer, NULL);
 	if (ret != 0) {
-		FPIN_ELOG("Failed to create consumer thread, err %d, retrying\n", ret);
-		retries--;
-		if (retries)
-			goto PCFCT;
-
-		FPIN_CLOG("Failed to create receiver thread, err %d, exiting\n", ret);
-		dump_err(1, ret);
+		FPIN_CLOG("pthread_create failed for receiver thread, err %d, %s\n", ret, strerror(errno));
 		exit (ret);
 	}
 
-	retries = 3;
-PJFRT:
 	ret = pthread_join(fpin_receiver_thread_id, NULL);
 	if (ret != 0) {
-		FPIN_ELOG("Failed to join consumer thread, err %d, retrying\n", ret);
 		retries--;
-		if (retries)
-			goto PJFRT;
-
-		FPIN_CLOG("Failed to join receiver thread, err %d, exiting\n", ret);
-		dump_err(2, ret);
+		FPIN_CLOG("pthread_join failed for reciever thread, err %d, %s\n", ret, strerror(errno));
 		exit (ret);
 	}
-	retries = 3;
-PJFCT:
 	ret = pthread_join(fpin_consumer_thread_id, NULL);
 	if (ret != 0) {
-		FPIN_ELOG("Failed to join consumer thread, err %d, retrying\n", ret);
-		retries--;
-		if (retries)
-			goto PJFCT;
-
-		FPIN_CLOG("Failed to join receiver thread, err %d, exiting\n", ret);
-		dump_err(2, ret);
+		FPIN_CLOG("pthread_join failed for consumer thread, err %d, %s\n", ret, strerror(errno));
 		exit (ret);
 	}
 
