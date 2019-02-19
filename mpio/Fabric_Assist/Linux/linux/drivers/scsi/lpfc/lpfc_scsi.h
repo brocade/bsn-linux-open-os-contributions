@@ -198,3 +198,4 @@ struct lpfc_scsi_buf {
 
 int lpfc_sli4_scmd_to_wqidx_distr(struct lpfc_hba *phba,
 				  struct lpfc_scsi_buf *lpfc_cmd);
+extern int fc_add_fpin_phba_list (uint64_t wwpn, struct lpfc_hba *phba);

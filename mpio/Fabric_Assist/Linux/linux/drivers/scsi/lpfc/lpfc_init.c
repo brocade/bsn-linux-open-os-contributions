@@ -98,6 +98,12 @@ static struct scsi_transport_template *lpfc_transport_template = NULL;
 static struct scsi_transport_template *lpfc_vport_transport_template = NULL;
 static DEFINE_IDR(lpfc_hba_index);
 #define LPFC_NVMET_BUF_POST 254
+struct list_head    fc_phba_list;
+struct fc_phba_list_info {
+	struct list_head    active_phba;
+	struct lpfc_hba *phba;
+	uint64_t wwn;
+};
 
 /**
  * lpfc_config_port_prep - Perform lpfc initialization prior to config port
@@ -12676,6 +12682,64 @@ static struct miscdevice lpfc_mgmt_dev = {
 };
 
 /**
+ * fc_add_fpin_phba_list - add the phba into the list
+ *
+ * This routine is invoked when an FPIN els has been received .
+ * This will store the phba structure and the corresponding wwn
+ * in the list.
+ *
+ * Return codes
+ *   0 - successful
+ */
+
+int fc_add_fpin_phba_list (uint64_t wwpn, struct lpfc_hba *phba)
+{
+	struct fc_phba_list_info *plist;
+
+	plist = kmalloc(sizeof(*plist), GFP_ATOMIC);
+	if (!plist)
+		return -ENOMEM;
+	plist->phba = phba;
+	plist->wwn = wwpn;
+	list_add_tail(&plist->active_phba, &fc_phba_list);
+	return 0;
+
+}
+EXPORT_SYMBOL(fc_add_fpin_phba_list);
+
+/**
+ * lpfc_link_integrity - flushes the pending io on the path
+ * assosciated with this initiator and target port
+ *
+ * Return codes
+ *   1 - successful
+ *   0- for invalid port_wwn
+ */
+
+
+static int lpfc_link_integrity(struct Scsi_Host *shost, struct fc_fpin_port_identifier *pinfo)
+{
+	struct fc_phba_list_info *plist;
+	struct lpfc_hba *phba;
+	struct list_head *p;
+	struct list_head *q;
+	uint64_t wwpn = 0;
+
+	list_for_each_safe (p, q, &fc_phba_list) {
+		plist = list_entry(p, struct fc_phba_list_info, active_phba);
+		phba = plist->phba;
+		memcpy(&wwpn, &phba->wwpn, sizeof(wwpn));
+		if (cpu_to_be64(wwpn) == pinfo->receiver_wwpn) {
+			lpfc_sli_flush_fcp_rings(phba);
+			list_del(p);
+			kfree(plist);
+			return 1;
+		}
+	}
+	return 0;
+}
+
+/**
  * lpfc_init - lpfc module initialization routine
  *
  * This routine is to be invoked when the lpfc module is loaded into the
@@ -12701,6 +12765,7 @@ lpfc_init(void)
 			"misc_register returned with status %d", error);
 
 	lpfc_transport_functions.vport_create = lpfc_vport_create;
+	lpfc_transport_functions.abort_outstanding_io = lpfc_link_integrity;
 	lpfc_transport_functions.vport_delete = lpfc_vport_delete;
 	lpfc_transport_template =
 				fc_attach_transport(&lpfc_transport_functions);
@@ -12724,7 +12789,7 @@ lpfc_init(void)
 		fc_release_transport(lpfc_transport_template);
 		fc_release_transport(lpfc_vport_transport_template);
 	}
-
+	INIT_LIST_HEAD(&fc_phba_list);
 	return error;
 }
 

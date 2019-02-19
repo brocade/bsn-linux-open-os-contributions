@@ -4068,6 +4068,11 @@ lpfc_scsi_cmd_iocb_cmpl(struct lpfc_hba *phba, struct lpfc_iocbq *pIocbIn,
 			spin_unlock_irqrestore(&phba->hbalock, flags);
 			lpfc_worker_wake_up(phba);
 			break;
+		case IOSTAT_DRIVER_REJECT:
+			if (lpfc_cmd->result == IOERR_SLI_DOWN) {
+				cmd->result = DID_NO_CONNECT << 16;
+				break;
+			}
 		case IOSTAT_LOCAL_REJECT:
 		case IOSTAT_REMOTE_STOP:
 			if (lpfc_cmd->result == IOERR_ELXSEC_KEY_UNWRAP_ERROR ||

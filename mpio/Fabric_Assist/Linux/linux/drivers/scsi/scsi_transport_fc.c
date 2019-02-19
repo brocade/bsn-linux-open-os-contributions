@@ -147,6 +147,8 @@ static const struct {
 	{ FCH_EVT_PORT_OFFLINE,		"port_offline" },
 	{ FCH_EVT_PORT_FABRIC,		"port_fabric" },
 	{ FCH_EVT_LINK_UNKNOWN,		"link_unknown" },
+	{ FCH_EVT_LINK_FPIN_LINK_INTEG,	"FPIN link integrity" },
+	{ FCH_EVT_LINK_FPIN_LINK_CONG,	"FPIN link congestion" },
 	{ FCH_EVT_VENDOR_UNIQUE,	"vendor_unique" },
 };
 fc_enum_name_search(host_event_code, fc_host_event_code,
@@ -321,7 +323,7 @@ static void fc_scsi_scan_rport(struct work_struct *work);
 #define FC_STARGET_NUM_ATTRS 	3
 #define FC_RPORT_NUM_ATTRS	10
 #define FC_VPORT_NUM_ATTRS	9
-#define FC_HOST_NUM_ATTRS	29
+#define FC_HOST_NUM_ATTRS	31
 
 struct fc_internal {
 	struct scsi_transport_template t;
@@ -658,6 +660,69 @@ send_vendor_fail:
 EXPORT_SYMBOL(fc_host_post_vendor_event);
 
 
+/**
+ * fc_host_post_fpin_event - called to post a fpin event from fabric to fc_host
+ * @shost:		host the event occurred on
+ * @event_number:	fc event number obtained from get_fc_event_number()
+ * @event_code:		fc_host event being posted
+ * @data_len:		amount, in bytes, of vendor unique data
+ * @data_buf:		pointer to vendor unique data
+ *
+ * Notes:
+ *	This routine assumes no locks are held on entry.
+ */
+void
+fc_host_post_fpin_event(struct Scsi_Host *shost, u32 event_number,
+		enum fc_host_event_code event_code, u32 data_len,
+		char *data_buf)
+{
+	struct sk_buff *skb;
+	struct nlmsghdr	*nlh;
+	struct fc_nl_event *event;
+	u32 len;
+	int err;
+
+	if (!scsi_nl_sock) {
+		err = -ENOENT;
+		goto send_fpin_fail;
+	}
+
+	len = FC_NL_MSGALIGN(sizeof(*event) + data_len);
+
+	skb = nlmsg_new(len, GFP_KERNEL);
+	if (!skb) {
+		err = -ENOBUFS;
+		goto send_fpin_fail;
+	}
+
+	nlh = nlmsg_put(skb, 0, 0, SCSI_TRANSPORT_MSG, len, 0);
+	if (!nlh) {
+		err = -ENOBUFS;
+		goto send_fpin_fail_skb;
+	}
+	event = nlmsg_data(nlh);
+
+	INIT_SCSI_NL_HDR(&event->snlh, SCSI_NL_TRANSPORT_FC,
+				FC_NL_ASYNC_EVENT, len);
+	event->seconds = ktime_get_real_seconds();
+	event->vendor_id = 0;
+	event->host_no = shost->host_no;
+	event->event_datalen = data_len;	/* bytes */
+	event->event_num = event_number;
+	event->event_code = event_code;
+	memcpy(&event->event_data, data_buf, data_len);
+
+	nlmsg_multicast(scsi_nl_sock, skb, 0, SCSI_NL_GRP_FC_EVENTS,
+			GFP_KERNEL);
+	return;
+
+send_fpin_fail_skb:
+	kfree_skb(skb);
+send_fpin_fail:
+	pr_warn("%s: Dropped Event : host %d post_fpin_event - err %d\n",
+		__func__, shost->host_no, err);
+}
+EXPORT_SYMBOL(fc_host_post_fpin_event);
 
 static __init int fc_transport_init(void)
 {
@@ -1846,6 +1911,59 @@ fc_parse_wwn(const char *ns, u64 *nm)
 	return 0;
 }
 
+/*
+ * The pending IOs between the IT nexus
+ * has to be cleared when it returns from this interface
+ * The HBA will receive the
+ * receiver WWPN:Victim WWPN for which the IOs needs to be flushed
+ * and returned with non retryable error.
+ * Input is a string of the form
+ * "<receiver WWPN>:<Victim WWPN>".The WWNs are specified
+ * as hex characters, and may *not* contain any prefixes (e.g. 0x, x, etc)
+ *
+ * Sending aborts cmnds to the firmware to abort outstanding io
+ * may not be feasible for the below reasons
+ * 1.Abort commands can be dropped on the bad link
+ * 2.delays(time to finish the abort command)
+ * 3.Abort success will retry the io on the same path again.
+ */
+static ssize_t
+store_fc_host_abort_outstanding_io(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct Scsi_Host *shost = transport_class_to_shost(dev);
+	struct fc_fpin_port_identifier port_id;
+	struct fc_internal *fci = to_fc_internal(shost->transportt);
+	unsigned int cnt = count;
+	int stat;
+	int error;
+
+	/* count may include a LF at end of string */
+	if (buf[cnt-1] == '\n')
+		cnt--;
+
+	/* validate we have enough characters for WWPN */
+	if ((cnt != (16+1+16)) || (buf[16] != ':'))
+		return -EINVAL;
+
+	stat = fc_parse_wwn(&buf[0], &port_id.receiver_wwpn);
+	if (stat)
+		return stat;
+
+	stat = fc_parse_wwn(&buf[17], &port_id.victim_wwpn);
+	if (stat)
+		return stat;
+	error = fci->f->abort_outstanding_io(shost, &port_id);
+	if (!error)
+		return 0;
+
+	return stat ? stat : count;
+}
+static FC_DEVICE_ATTR(host, abort_outstanding_io, S_IWUSR, NULL,
+			store_fc_host_abort_outstanding_io);
+
+
 
 /*
  * "Short-cut" sysfs variable to create a new vport on a FC Host.
@@ -2255,6 +2373,10 @@ fc_attach_transport(struct fc_function_template *ft)
 	SETUP_PRIVATE_HOST_ATTRIBUTE_RW(tgtid_bind_type);
 	if (ft->issue_fc_host_lip)
 		SETUP_PRIVATE_HOST_ATTRIBUTE_RW(issue_lip);
+
+	if (ft->abort_outstanding_io)
+		SETUP_PRIVATE_HOST_ATTRIBUTE_RW(abort_outstanding_io);
+
 	if (ft->vport_create)
 		SETUP_PRIVATE_HOST_ATTRIBUTE_RW(vport_create);
 	if (ft->vport_delete)
