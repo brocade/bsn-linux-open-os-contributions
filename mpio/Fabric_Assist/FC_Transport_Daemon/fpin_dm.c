@@ -107,19 +107,23 @@ fpin_insert_dm(struct list_head *dm_list_head, char *dm_name,
  */
 int
 fpin_insert_sd(struct list_head *impacted_dev_list_head, char *dev_name,
-			char *sd_node, char *serial_id, char *dev_wwn) {
+			char *sd_node, char *serial_id, char *dev_wwn, char *sd_path) {
 	struct impacted_dev_list *new_node = NULL;
-	int dev_name_len = 0, sd_node_len = 0, serial_id_len = 0;
+	int dev_name_len = 0, sd_node_len = 0, serial_id_len = 0, sd_path_len = 0;
+//#MMK
 	dev_name_len = strlen(dev_name);
 	sd_node_len = strlen(sd_node);
 	serial_id_len = strlen(serial_id);
+	sd_path_len = strlen(sd_path);	
 
 	if ((dev_name_len > (DEV_NAME_LEN - 1)) ||
 		(sd_node_len > (DEV_NAME_LEN - 1)) ||
-		(serial_id_len > (UUID_LEN - 1))) {
+		(serial_id_len > (UUID_LEN - 1)) ||
+		(sd_path_len > (SYS_PATH_LEN - 1))) {
 		FPIN_ELOG("Failed to add %s : %s, params exceed buffer length "
-			"dev_name_len %d, node_len %d, serial_id_len %d\n",
-			dev_name, sd_node, dev_name_len, sd_node_len, serial_id_len);
+			"dev_name_len %d, node_len %d, serial_id_len %d, sd_path_len %d\n",
+			dev_name, sd_node, dev_name_len, sd_node_len,
+			serial_id_len, sd_path_len);
 		return (-EINVAL);
 	}
 
@@ -132,6 +136,7 @@ fpin_insert_sd(struct list_head *impacted_dev_list_head, char *dev_name,
 		strncpy(new_node->dev_node, sd_node, (DEV_NAME_LEN - 1));
 		strncpy(new_node->dev_serial_id, serial_id,(UUID_LEN - 1));
 		strncpy(new_node->dev_pwwn, dev_wwn, (WWN_LEN - 1));
+		strncpy(new_node->sd_path, sd_path, (SYS_PATH_LEN - 1));
 		FPIN_ILOG("Inserted %s : %s : %s : %s into sd list\n",
 			new_node->dev_name, new_node->dev_node,
 			new_node->dev_serial_id, new_node->dev_pwwn);
@@ -332,6 +337,34 @@ int fpin_dm_get_active_path_count(char *dm_status) {
 	return(count);
 }
 
+static int
+flush_pending_io(struct wwn_list *list, struct impacted_dev_list *temp) {
+	char cmd[CMD_LEN], dm_status[DM_PARAMS_SIZE];
+	char file_name[FILE_PATH_LEN];
+	int fd = -1, ret = 0;
+	/*
+	 * Now push the I-T WWN pair to SCSI transport layer to flush
+	 * pending I/O.
+	 */
+	snprintf(file_name, (SYS_PATH_LEN - 1), "%s/%s",
+					list->hba_syspath, IO_FLUSH_ATTR);
+	if ((fd = open(file_name, O_WRONLY)) < 0) {
+			FPIN_ELOG("Failed to open intf for %s\n", temp->dev_name);
+			return (fd);
+	}
+
+	memset(cmd, '\0', CMD_LEN);
+	snprintf(cmd, (CMD_LEN - 1), "%s:%s",
+					list->hba_wwn+2, temp->dev_pwwn+2);
+	FPIN_DLOG("Sending %s to backend %s\n", cmd, file_name);
+	if ((ret = write(fd, cmd, strlen(cmd))) < 0) {
+			FPIN_ELOG("Failed to update the backend for %s %s %d\n",
+							__func__,temp->dev_name, ret);
+			return (ret);
+	}
+	close(fd);
+	return (ret);
+}
 /*
  * Function:
  * 	fpin_dm_fail_path
@@ -350,10 +383,11 @@ void
 fpin_dm_fail_path(struct udev *udev, struct list_head *dm_list_head,
 			struct list_head *impacted_dev_list_head,
 			struct wwn_list *list) {
+	struct udev_device *dev = NULL, *parent_dev = NULL;
 	struct impacted_dev_list *temp = NULL;
 	char *impacted_dm = NULL;
 	char cmd[CMD_LEN], dm_status[DM_PARAMS_SIZE];
-	char file_name[SYS_PATH_LEN];
+	char file_name[FILE_PATH_LEN];
 	int ret = -1, fd = -1;
 	if (list_empty(dm_list_head)) {
 		FPIN_ELOG("DM list is empty, not failing any sd\n");
@@ -378,25 +412,41 @@ fpin_dm_fail_path(struct udev *udev, struct list_head *dm_list_head,
 		if (!ret) {
 			ret = fpin_dm_get_active_path_count(dm_status);
 			if (ret > 1) {
+				/* 
+				 * Fail the impacted Path
+				 */
 				FPIN_ILOG("Failing %s:%s\n", temp->dev_node, temp->dev_name);
 				snprintf(cmd, (CMD_LEN - 1), "multipathd fail path %s",
 					temp->dev_name);
 				system(cmd);
 				/*
-				 * Now push the I-T WWN pair to SCSI transport layer to flush
-				 * pending I/O.
+				 * Move the i/o in the marginal path device queue into
+				 * alterante active path  bysetting the device state
+				 * to "transport-offline"
 				 */
-				snprintf(file_name, (SYS_PATH_LEN - 1), "%s/%s",
-					list->hba_syspath, IO_FLUSH_ATTR);
+				snprintf(file_name, (FILE_PATH_LEN - 1), "%s/%s",
+					temp->sd_path, "device/state");
 				if ((fd = open(file_name, O_WRONLY)) < 0) {
 					FPIN_ELOG("Failed to open intf for %s\n", temp->dev_name);
 					continue;
 				}
-				snprintf(cmd, (CMD_LEN - 1), "%s:%s",
-							list->hba_wwn+2, temp->dev_pwwn+2);
-				if ((write(fd, cmd, strlen(cmd))) < 0) {
-					FPIN_ELOG("Failed to update the backend for %s\n",
-								temp->dev_name);
+
+				memset(cmd, '\0', CMD_LEN);
+				snprintf(cmd, (CMD_LEN - 1), "%s", "transport-offline\n");
+				FPIN_DLOG("Writing %s to %s\n", cmd, file_name);
+				if ((ret = write(fd, cmd, strlen(cmd))) < 0) {
+					FPIN_ELOG("Failed to update the backend for transport-offline  %s %d\n",
+								temp->dev_name, ret);
+				}
+				flush_pending_io(list, temp);
+				/* Temporary Sleep, will be replaced with timers */
+				sleep(5);
+				memset(cmd, '\0', CMD_LEN);
+				snprintf(cmd, (CMD_LEN - 1), "%s", "running\n");
+				FPIN_DLOG("Writing %s to %s\n", cmd, file_name);
+				if ((ret = write(fd, cmd, strlen(cmd))) < 0) {
+					FPIN_ELOG("Failed to update the backend for running  %s %d\n",
+								temp->dev_name, ret);
 				}
 				close(fd);
 			} else {
@@ -813,6 +863,7 @@ fpin_populate_dm_lun(struct list_head *dm_list_head,
 			continue;
 		} else if (strncmp("sd", dev_buf, 2) == 0) {
 			/* Handle SDs */
+			FPIN_DLOG("####Got syspath as %s\n", dir_path_buf);
 			parent_dev = udev_device_get_parent_with_subsystem_devtype(
 				dev, "scsi", "scsi_target");
 			if (!parent_dev) {
@@ -824,6 +875,7 @@ fpin_populate_dm_lun(struct list_head *dm_list_head,
 
 			snprintf(target_buf, sizeof(target_buf), "%s",
 				udev_device_get_sysname(parent_dev));
+			FPIN_ILOG("###Got target_buf as %s\n", target_buf);
 
 			if (fpin_dm_find_target(target_head, target_buf, &tgt_wwn) != 0) {
 				snprintf(lun_buf, sizeof(lun_buf), "%s:%s",
@@ -831,8 +883,9 @@ fpin_populate_dm_lun(struct list_head *dm_list_head,
 					udev_device_get_property_value(dev, "MINOR"));
 				snprintf(uid_buf, sizeof(uid_buf), "%s",
 					udev_device_get_property_value(dev, "ID_SERIAL"));
+				FPIN_ILOG("###Attempting %s, %s\n", lun_buf, uid_buf);
 				ret = fpin_insert_sd(impacted_dev_list_head, dev_buf,
-					lun_buf, uid_buf, tgt_wwn);
+					lun_buf, uid_buf, tgt_wwn, dir_path_buf);
 				if (ret < 0) {
 					FPIN_ELOG("Failed to insert %s %s to sd list\n",
 							dev_buf, lun_buf);

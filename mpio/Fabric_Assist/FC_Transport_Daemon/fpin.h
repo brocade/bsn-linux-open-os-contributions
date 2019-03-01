@@ -104,6 +104,7 @@ struct impacted_dev_list
 	char dev_name[DEV_NAME_LEN];
 	char dev_serial_id[UUID_LEN];
 	char dev_pwwn[WWN_LEN];
+	char sd_path[SYS_PATH_LEN];
 	struct list_head dev_list_head;
 };
 
