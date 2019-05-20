@@ -48,21 +48,19 @@ pthread_mutex_t fpin_li_marginal_dev_mutex = PTHREAD_MUTEX_INITIALIZER;
  */
 int
 fpin_insert_dm(struct list_head *dm_list_head, const char *dm_name,
-			const char *dm_node, const char *uid_name) {
+			const char *uid_name) {
 	struct dm_devs *new_node = NULL;
 	char *uid_ptr = NULL;
-	int dm_name_len = 0, dm_node_len = 0, uid_name_len = 0;
+	int dm_name_len = 0, uid_name_len = 0;
 
 	dm_name_len = strlen(dm_name);
-	dm_node_len = strlen(dm_node);
 	uid_name_len = strlen(uid_name);
 
 	if ((dm_name_len > (DEV_NAME_LEN - 1)) ||
-		(dm_node_len > (DEV_NAME_LEN - 1)) ||
 		(uid_name_len > (UUID_LEN -1 ))) {
-		FPIN_ELOG("Failed to add %s : %s, params exceed buffer length "
-		"dm_name %d, dm_node %d, uid_name %d\n", dm_name, dm_node,
-			dm_name_len, dm_node_len, uid_name_len);
+		FPIN_ELOG("Failed to add %s, params exceed buffer length "
+		"dm_name %d, dm_node %d, uid_name %d\n", dm_name,
+			dm_name_len, uid_name_len);
 		return (-EINVAL);
 	}
 
@@ -70,28 +68,27 @@ fpin_insert_dm(struct list_head *dm_list_head, const char *dm_name,
 	new_node = (struct dm_devs *) malloc(sizeof(struct dm_devs));
 	if (new_node != NULL) {
 		/* Set values in new node */
-		strncpy(new_node->dm_name, dm_name, (DEV_NAME_LEN - 1));
-		strncpy(new_node->dm_dev_node, dm_node, (DEV_NAME_LEN - 1));
+		strncpy(new_node->dm_name, dm_name, DEV_NAME_LEN);
 		/*
 		 * Checking with only a '-' as this function is onvoked only
 		 * if uid_name has mpath- string in it.
 		 */
-		uid_ptr = (strchr(uid_name, '-') + 1);
+		uid_ptr = strchr(uid_name, '-');
 		if (uid_ptr != NULL) {
-			strncpy(new_node->dm_uuid, uid_ptr, (UUID_LEN - 1));
+			uid_ptr++;
+			/* No need to NULL check as UUID name cannot be blank */
+			strncpy(new_node->dm_uuid, uid_ptr, UUID_LEN);
 		} else {
-			FPIN_ELOG("Failed to fetch dm_uuid for %s : %s\n",
-				dm_name, dm_node);
+			FPIN_ELOG("Failed to fetch dm_uuid for %s\n", dm_name);
 			free(new_node);
 			return (-EBADF);
 		}
 
-		FPIN_ILOG("Inserted %s : %s : %s into dm list\n",
-			new_node->dm_name, new_node->dm_dev_node, new_node->dm_uuid);
+		FPIN_ILOG("Inserted %s : %s into dm list\n",
+			new_node->dm_name, new_node->dm_uuid);
 		list_add_tail(&(new_node->dm_list_head), dm_list_head);
 	} else {
-		FPIN_ELOG("Failed to add %s : %s, OOM\n",
-				dm_name, dm_node);
+		FPIN_ELOG("Failed to add %s, OOM\n", dm_name);
 		return -ENOMEM;
 	}
 
@@ -137,9 +134,9 @@ fpin_insert_sd(struct list_head *impacted_dev_list_head, const char *dev_name,
 				malloc(sizeof(struct impacted_devs));
 	if (new_node != NULL) {
 		/* Set values in new node */
-		strncpy(new_node->dev_name, dev_name, (DEV_NAME_LEN - 1));
-		strncpy(new_node->dev_node, sd_node, (DEV_NAME_LEN - 1));
-		strncpy(new_node->dev_serial_id, serial_id,(UUID_LEN - 1));
+		strncpy(new_node->dev_name, dev_name, DEV_NAME_LEN);
+		strncpy(new_node->dev_node, sd_node, DEV_NAME_LEN);
+		strncpy(new_node->dev_serial_id, serial_id, UUID_LEN);
 		FPIN_ILOG("Inserted %s : %s : %s into sd list\n",
 			new_node->dev_name, new_node->dev_node,	new_node->dev_serial_id);
 		list_add_tail(&(new_node->dev_list_head), impacted_dev_list_head);
@@ -181,7 +178,7 @@ fpin_dm_insert_target(struct list_head *tgt_list_head, const char *target) {
 	new_node = (struct targets *) malloc(sizeof(struct targets));
 	if (new_node != NULL) {
 		/* Set values in new node */
-		strncpy(new_node->target, target, (TGT_NAME_LEN - 1));
+		strncpy(new_node->target, target, TGT_NAME_LEN);
 		FPIN_ILOG("Inserted %s into target list\n", new_node->target);
 		list_add_tail(&(new_node->target_head), tgt_list_head);
 	} else {
@@ -199,8 +196,7 @@ fpin_display_dm_list(struct list_head *list_head) {
 		FPIN_DLOG("DM list is empty, not failing any sd\n");
 	} else {
 		list_for_each_entry(temp, list_head, dm_list_head) {
-			FPIN_DLOG("Contains: dm_name: %s, dm_node: %s\n",
-				temp->dm_name, temp->dm_dev_node);
+			FPIN_DLOG("Contains: dm_name: %s\n", temp->dm_name);
 		}
 	}
 }
@@ -240,23 +236,22 @@ int
 fpin_fetch_dm_for_sd(struct list_head *dm_head,
 				char *dev_serial_id, char **impacted_dm) {
 	struct dm_devs *dm = NULL;
-	int found = -1;
 
 	if (list_empty(dm_head)) {
 		FPIN_ELOG("DM list is empty, returning -1\n");
-		return (found);
+		return (-1);
 	} else {
 		list_for_each_entry(dm, dm_head, dm_list_head) {
 			if (strncmp(dev_serial_id, dm->dm_uuid, UUID_LEN) == 0) {
-				*impacted_dm = dm->dm_dev_node;
+				*impacted_dm = dm->dm_name;
 				FPIN_DLOG("Found impacted dm %s\n", *impacted_dm);
-				found  = 1;
+				return (1);
 				break;
 			}
 		}
 	}
 
-	return (found);
+	return (0);
 }
 
 int dm_get_status(const char *name, char *outstatus)
@@ -321,6 +316,10 @@ int fpin_dm_get_active_path_count(char *dm_status) {
 			ptr++;
 		}
 
+		if (*ptr == '\0') {
+			return (count);
+		}
+
 		/* Skip white space */
 		ptr++;
 		FPIN_DLOG("Got status as %c\n", *ptr);
@@ -333,6 +332,47 @@ int fpin_dm_get_active_path_count(char *dm_status) {
 
 	return(count);
 }
+
+int send_packet(int fd, const char *buf)
+{
+        if (mpath_send_cmd(fd, buf) < 0)
+                return -errno;
+        return 0;
+}
+
+static int _recv_packet(int fd, char **buf, unsigned int timeout, ssize_t limit)
+{
+        int err = 0;
+        ssize_t len = 0;
+
+        *buf = NULL;
+        len = mpath_recv_reply_len(fd, timeout);
+        if (len == 0)
+                return len;
+        if (len < 0)
+                return -errno;
+        if ((limit > 0) && (len > limit))
+                return -EINVAL;
+        (*buf) = malloc(len);
+        if (!*buf)
+                return -ENOMEM;
+        err = mpath_recv_reply_data(fd, *buf, len, timeout);
+        if (err != 0) {
+                free(*buf);
+                (*buf) = NULL;
+                return -errno;
+        }
+        return err;
+}
+
+/*
+ * receive a packet in length prefix format
+ */
+int recv_packet(int fd, char **buf, unsigned int timeout)
+{
+        return _recv_packet(fd, buf, timeout, 0 /* no limit */);
+}
+
 
 /*
  * Function:
@@ -352,6 +392,7 @@ void
 fpin_dm_fail_path(struct list_head *dm_list_head,
 			struct list_head *impacted_dev_list_head) {
 	struct impacted_devs *temp = NULL;
+	char *reply = NULL;
 	char *impacted_dm = NULL;
 	char cmd[CMD_LEN], dm_status[DM_PARAMS_SIZE];
 	int ret = -1, fd = -1;
@@ -363,6 +404,12 @@ fpin_dm_fail_path(struct list_head *dm_list_head,
 
 	if (list_empty(impacted_dev_list_head)) {
 		FPIN_ELOG("SD List is empty, not failing any sd\n");
+		return;
+	}
+
+	fd = mpath_connect();
+	if (fd < 0) {
+		FPIN_CLOG("Not any devices, mpath_connect failed with %d\n", fd);
 		return;
 	}
 
@@ -384,9 +431,23 @@ fpin_dm_fail_path(struct list_head *dm_list_head,
 				 * Fail the impacted Path in DM
 				 */
 				FPIN_ILOG("Failing %s:%s\n", temp->dev_node, temp->dev_name);
-				snprintf(cmd, (CMD_LEN - 1), "multipathd fail path %s",
-					temp->dev_name);
-				system(cmd);
+				snprintf(cmd, (CMD_LEN - 1), "fail path %s", temp->dev_name);
+				if ((ret = send_packet(fd, cmd)) != 0) {
+					FPIN_ELOG("send_packet failed with %d\n", ret);
+					continue;
+				}
+				FPIN_ELOG("CMD %s\n", cmd);
+				ret = recv_packet(fd, &reply, 100);
+				if (ret < 0) {
+					if (ret == -ETIMEDOUT)
+						FPIN_ELOG("timeout receiving packet\n");
+					else
+						FPIN_ELOG("error %d receiving packet\n", ret);
+					return;
+				} else {
+					FPIN_DLOG("%s", reply);
+					free(reply);
+				}
 			} else {
 				FPIN_ELOG("Not Failing %s, not enough Active paths\n",
 					temp->dev_name);
@@ -394,6 +455,8 @@ fpin_dm_fail_path(struct list_head *dm_list_head,
 			}
 		}
 	}
+	mpath_disconnect(fd);
+
 }
 
 void
@@ -411,7 +474,6 @@ fpin_dm_display_target(struct list_head *tgt_head) {
 int
 fpin_dm_find_target(struct list_head *tgt_head, const char *target) {
 	struct targets *temp = NULL;
-	int found  = 0;
 
 	if (list_empty(tgt_head)) {
 		FPIN_DLOG("Target List is empty, %s not found\n", target);
@@ -426,13 +488,12 @@ fpin_dm_find_target(struct list_head *tgt_head, const char *target) {
 			 */
 			if (strcmp(temp->target, target) == 0) {
 				FPIN_DLOG("Found Target %s\n", target);
-				found = 1;
-				return (found);
+				return (1);
 			}
 		}
 	}
 
-	return (found);
+	return (0);
 }
 
 void
@@ -446,7 +507,7 @@ fpin_free_dm(struct list_head *dm_head) {
 	} else {
 		list_for_each_safe(current_node, temp, dm_head) {
 			tmp_dm = list_entry(current_node, struct dm_devs, dm_list_head);
-			FPIN_DLOG("Free dm %s\n", tmp_dm->dm_dev_node);
+			FPIN_DLOG("Free dm %s\n", tmp_dm->dm_name);
 			list_del(current_node);
 			free(tmp_dm);
 		}
@@ -679,12 +740,14 @@ fpin_dm_populate_target(struct wwn_list *list, struct list_head *tgt_list,
 		if (!parent_dev) {
 			FPIN_ELOG("Unable to find parent device for %s\n",
 							udev_device_get_sysname(dev));
+			udev_device_unref(dev);
 			continue;
 		}
 
 		target_buf = udev_device_get_sysname(dev);
 		if (target_buf == NULL) {
 			FPIN_ELOG("Unable to get tgt sysname from host %s\n", host_buf);
+			udev_device_unref(dev);
 			continue;
 		}
 
@@ -697,6 +760,7 @@ fpin_dm_populate_target(struct wwn_list *list, struct list_head *tgt_list,
 			port_wwn_buf = udev_device_get_sysattr_value(dev, "port_name");
 			if (port_wwn_buf == NULL) {
 				FPIN_ELOG("Could not get tgt WWN for %s\n", host_buf);
+				udev_device_unref(dev);
 				continue;
 			}
 
@@ -793,10 +857,10 @@ fpin_populate_dm_lun(struct list_head *dm_list_head,
 		dev_buf = udev_device_get_sysname(dev);
 		FPIN_DLOG("Got dev_name as %s\n", dev_buf);
 		if (strncmp("dm-", dev_buf, 3) == 0) {
-			dm_buf = udev_device_get_property_value(dev, "DM_NAME");
-			if (strncmp("mpath", dm_buf, 5) == 0) {
-				uid_buf = udev_device_get_property_value(dev, "DM_UUID");
-				ret = fpin_insert_dm(dm_list_head, dev_buf, dm_buf, uid_buf);
+			uid_buf = udev_device_get_property_value(dev, "DM_UUID");
+			if (strncmp("mpath-", uid_buf, 6) == 0) {
+				dm_buf = udev_device_get_property_value(dev, "DM_NAME");
+				ret = fpin_insert_dm(dm_list_head, dm_buf, uid_buf);
 				if (ret < 0) {
 					FPIN_ELOG("Failed to Insert %s : %s\n", dev_buf, dm_buf);
 				} else {
@@ -804,8 +868,6 @@ fpin_populate_dm_lun(struct list_head *dm_list_head,
 				}
 			}
 
-			udev_device_unref(dev);
-			continue;
 		} else if (strncmp("sd", dev_buf, 2) == 0) {
 			/* Handle SDs */
 			FPIN_DLOG("####Got syspath as %s\n", dir_path_buf);
@@ -848,6 +910,8 @@ fpin_populate_dm_lun(struct list_head *dm_list_head,
 			fpin_dm_free_dev(impacted_dev_list_head);
 		}
 		return(dm_count);
+	} else if (sd_count <= 0) {
+		fpin_free_dm(dm_list_head);
 	}
 
 	return (sd_count);

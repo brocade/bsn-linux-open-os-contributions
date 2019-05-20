@@ -111,12 +111,6 @@ void fpin_fabric_notification_receiver()
 		fpin_handle_els_frame(fpin_payload);
 	}
 
-	if (fpin_payload != NULL) {
-		free(fpin_payload);
-		fpin_payload = NULL;
-	}
-
-	close(fd);
 }
 
 /*

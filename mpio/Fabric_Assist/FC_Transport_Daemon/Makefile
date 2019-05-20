@@ -2,9 +2,9 @@ SRCS	= fpin_main.c fpin_els.c fpin_dm.c
 
 OBJS	= $(SRCS:.c=.o)
 
-LIB	= -lpthread -ludev -ldevmapper
+LIB	= -lpthread -ludev -ldevmapper -lmpathcmd
 
-CFLAGS	= -DFPIN_DEBUG -g
+#CFLAGS	= -DFPIN_DEBUG -g
 
 TARGET	= fctxpd
 

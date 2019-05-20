@@ -18,6 +18,7 @@
 #include <dirent.h>
 #include <libudev.h>
 #include <libdevmapper.h>
+#include <mpath_cmd.h>
 #include <sysexits.h>
 #include <syslog.h>
 #include <fcntl.h>
@@ -32,10 +33,10 @@
 #define FPIN_ELOG(fmt...) syslog(LOG_ERR, fmt);
 #define FPIN_CLOG(fmt...) syslog(LOG_CRIT, fmt);
 #else
-#define FPIN_DLOG
-#define FPIN_ILOG
-#define FPIN_ELOG
-#define FPIN_CLOG
+#define FPIN_DLOG(fmt...)
+#define FPIN_ILOG(fmt...)
+#define FPIN_ELOG(fmt...)
+#define FPIN_CLOG(fmt...)
 #endif
 
 
@@ -63,7 +64,6 @@ struct impacted_devs
 
 struct dm_devs
 {
-	char dm_dev_node[DEV_NAME_LEN];
 	char dm_name[DEV_NAME_LEN];
 	char dm_uuid[UUID_LEN];
 	struct list_head dm_list_head;

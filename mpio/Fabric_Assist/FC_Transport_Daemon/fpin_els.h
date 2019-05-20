@@ -77,6 +77,8 @@ typedef enum fpin_congestion_notification_event_type {
  * This structure is used in cases where the Descriptor details are not
  * immediately known. Thus, only the Tag and Length fields are defined
  * so that the Descriptor parser may examine and categorize via said fields.
+ *
+ * Copied the definition as-is from the sender side. (i.e. FOS switch)
  */
 typedef struct fpin_descriptor_header {
 	fpin_notification_descriptor_tag_e		tag;			/* Unspecified tag; may be unknown */

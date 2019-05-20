@@ -115,7 +115,6 @@ fpin_els_insert_port_wwn(struct wwn_list *list, char *port_wwn_buf)
 
 int
 fpin_els_wwn_exists(struct wwn_list *list, const char *port_wwn_buf) {
-	int found = 0;
 	struct impacted_port_wwns *temp = NULL;
 
 	if (list_empty(&(list->impacted_ports_wwn_head))) {
@@ -129,13 +128,12 @@ fpin_els_wwn_exists(struct wwn_list *list, const char *port_wwn_buf) {
 						strlen(port_wwn_buf)) == 0) {
 				FPIN_ILOG("breaking for %s %s\n", temp->impacted_port_wwn,
 						port_wwn_buf);
-				found = 1;
-				return (found);
+				return (1);
 			}
 		}
 	}
 
-	return (found);
+	return (0);
 }
 
 void
@@ -214,7 +212,14 @@ fpin_els_extract_wwn(uint16_t host_num, fpin_link_integrity_notification_t *li,
 		snprintf(port_wwn_buf, WWN_LEN, "0x%08x%08x", 
 			ntohl(currentPortListOffset_p->words[0]),
 			ntohl(currentPortListOffset_p->words[1]));
-		fpin_els_insert_port_wwn(list, port_wwn_buf);
+		if (fpin_els_insert_port_wwn(list, port_wwn_buf) < 0) {
+			/* 
+			 * No point in adding more as we are out of memory, return
+			 * the count of devices already added.
+			 */
+			return (count);
+		}
+
 		currentPortListOffset_p++;
 		count++;
 	}
@@ -272,6 +277,7 @@ fpin_process_els_frame(uint16_t host_num, char *fc_payload) {
 			INIT_LIST_HEAD(&impacted_dev_list_head);
 			udev = udev_new();
 			if (!udev) {
+				fpin_els_free_wwn_list(&list_of_wwn);
 				FPIN_ELOG("Can't create udev\n");
 				return(-1);
 			}
@@ -279,14 +285,14 @@ fpin_process_els_frame(uint16_t host_num, char *fc_payload) {
 			FPIN_DLOG("Got new udev Resource\n");
 			count = fpin_fetch_dm_lun_data(&list_of_wwn,
 					&dm_list_head, &impacted_dev_list_head, udev);
+
+			udev_unref(udev);
 			if (count <= 0) {
 				FPIN_ELOG("Could not find any sd to fail, ret = %d\n", count);
 				fpin_els_free_wwn_list(&list_of_wwn);
-				udev_unref(udev);
 				return count;
 			}
 
-			udev_unref(udev);
 
 			/* Fail the paths using multipath daemon */
 			fpin_dm_fail_path(&dm_list_head, &impacted_dev_list_head);
@@ -379,7 +385,6 @@ void *fpin_els_li_consumer() {
 		while (!list_empty(&marginal_list_head)) {
 			els_marg  = list_first_entry(&marginal_list_head,
 							struct els_marginal_list, els_frame);
-			memset(payload, '\0', FC_PAYLOAD_MAXLEN);
 			host_num = els_marg->host_num;
 			memcpy(payload, els_marg->payload, FC_PAYLOAD_MAXLEN);
 			list_del(&els_marg->els_frame);
