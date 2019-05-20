@@ -4,32 +4,41 @@
 #include <pthread.h>
 #include <endian.h>
 #include <arpa/inet.h>
+#include <time.h>
 
 #include "list.h"
 
 /* max ELS frame Size */
 #define FC_PAYLOAD_MAXLEN   2048
-
+#define SYS_PATH_LEN		512
 /* ELS Frame, TBD: Use FPIN ELS once standardized */
 #define ELS_CMD_FPIN 0x16
 #define ELS_CMD_MPD 0x82
 #define ELS_CMD_CJN 0x83
 
+#define MARGINAL_CHECKER_WAIT_TIME 30
+
 /*
- * Union of all possible formats
+ * This data is read from FC frame, which has a mixture of
+ * both 32 and 64 bit data. Using wwn_t as 64-bit is causing
+ * an offset of 32 bits when used with be64toh. Hence, using
+ * wwn_t as two 32-bit words and using ntohl instead.
  */
-typedef union wwn {
-	/*
-	 * Big TBD: Take care of 32 and 64 B arch. Used this type temporarily
-	 * as this is how the struct is sent on wire now.
-	 */
+typedef struct wwn {
 	uint32_t	words[2];
 } wwn_t;
 
 struct els_marginal_list {
-	wwn_t hba_pwwn;
+	uint16_t host_num;
+	uint16_t length;
 	char payload[FC_PAYLOAD_MAXLEN];
 	struct list_head els_frame;
+};
+
+struct marginal_dev_list {
+	char dev_sys_path[SYS_PATH_LEN];
+	time_t dev_log_time;
+	struct list_head dev_list_head;
 };
 
 /* --- FPIN --- */
@@ -49,8 +58,7 @@ typedef enum fpin_congestion_notification_event_type {
 	eFPIN_CONGESTION_NOTIFICATION_EVENT_TYPE_NONE			= 0x00,
 	eFPIN_CONGESTION_NOTIFICATION_EVENT_TYPE_LOST_CREDIT	= 0x01,
 	eFPIN_CONGESTION_NOTIFICATION_EVENT_TYPE_CREDIT_STALL	= 0x02,
-	eFPIN_CONGESTION_NOTIFICATION_EVENT_TYPE_OVERSUBSCRIPTION \
-															= 0x03
+	eFPIN_CONGESTION_NOTIFICATION_EVENT_TYPE_OVERSUBSCRIPTION = 0x03
 } fpin_congestion_notification_event_type_e;
 
 /* Link Integrity Notification Event Types (16bit so no enum) */
@@ -100,18 +108,18 @@ typedef struct fpin_els_header {
 
 typedef struct fpin_link_integrity_request_els {
 	fpin_els_header_t					els_header;
-//	fpin_link_integrity_notification_t	li_desc;	/* Link Integrity Descriptor */
 	fpin_link_integrity_notification_t	linkIntegrityDesc;	/* Link Integrity Descriptor */
 } fpin_link_integrity_request_els_t;
 
 /* FPIN Payload received from HBA driver */
 typedef struct fpin_payload {
-	wwn_t hba_wwn;
-	uint32_t length; //2048 for now
+	uint16_t host_num;
+	uint16_t length; //2048 for now
 	char payload[0];
 } fpin_payload_t;
 
 /* FPIN ELS Handler functions */
 void *fpin_els_li_consumer();
+void *fpin_li_marginal_checker();
 int fpin_handle_els_frame(fpin_payload_t *fpin_payload);
 #endif

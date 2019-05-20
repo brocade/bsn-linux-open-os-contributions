@@ -23,6 +23,7 @@
  *
  * Authors:
  *      Ganesh Pai <ganesh.pai@broadcom.com>
+ *      Muneendra Kumar <muneendra.kumar@broadcom.com>
  */
 
 #include "fpin.h"
@@ -49,7 +50,7 @@ fpin_els_add_li_frame(fpin_payload_t *fpin_payload) {
 	struct els_marginal_list *els_mrg = NULL;
 	els_mrg = malloc(sizeof(struct els_marginal_list));
 	if (els_mrg != NULL) {
-		els_mrg->hba_pwwn = fpin_payload->hba_wwn;
+		els_mrg->host_num = fpin_payload->host_num;
 		memcpy(els_mrg->payload, fpin_payload->payload, FC_PAYLOAD_MAXLEN);
 		pthread_mutex_lock(&fpin_li_mutex);
 		list_add_tail(&els_mrg->els_frame, &els_marginal_list_head);
@@ -79,11 +80,11 @@ fpin_els_add_li_frame(fpin_payload_t *fpin_payload) {
 int
 fpin_els_insert_port_wwn(struct wwn_list *list, char *port_wwn_buf)
 {
-	struct impacted_port_wwn_list *new_wwn = NULL;
+	struct impacted_port_wwns *new_wwn = NULL;
 	FPIN_ILOG("Inserting %s...\n", port_wwn_buf);
 
 	 /* Create a node */
-	new_wwn = (struct impacted_port_wwn_list*)malloc(sizeof(struct impacted_port_wwn_list));
+	new_wwn = (struct impacted_port_wwns *)malloc(sizeof(struct impacted_port_wwns));
 	if (new_wwn == NULL) {
 		FPIN_CLOG("No memory to assign pwwn %s\n", port_wwn_buf);
 		return -ENOMEM;
@@ -94,7 +95,7 @@ fpin_els_insert_port_wwn(struct wwn_list *list, char *port_wwn_buf)
 				"%s", port_wwn_buf);
 	FPIN_ILOG(" Assigned  %s to new node\n", new_wwn->impacted_port_wwn);
 	list_add_tail(&(new_wwn->impacted_port_wwn_head),
-		&(list->impacted_ports.impacted_port_wwn_head));
+		&(list->impacted_ports_wwn_head));
 
 	return (0);
 }
@@ -113,14 +114,14 @@ fpin_els_insert_port_wwn(struct wwn_list *list, char *port_wwn_buf)
  */
 
 int
-fpin_els_wwn_exists(struct wwn_list *list, char *port_wwn_buf) {
+fpin_els_wwn_exists(struct wwn_list *list, const char *port_wwn_buf) {
 	int found = 0;
-	struct impacted_port_wwn_list *temp = NULL;
+	struct impacted_port_wwns *temp = NULL;
 
-	if (list_empty(&(list->impacted_ports.impacted_port_wwn_head))) {
+	if (list_empty(&(list->impacted_ports_wwn_head))) {
         	FPIN_ELOG("List is empty, %s not found\n", port_wwn_buf);
 	} else {
-		list_for_each_entry(temp, &(list->impacted_ports.impacted_port_wwn_head),
+		list_for_each_entry(temp, &(list->impacted_ports_wwn_head),
 								impacted_port_wwn_head) {
 			FPIN_DLOG("Checking for %s and %s\n", temp->impacted_port_wwn,
 						port_wwn_buf);
@@ -139,31 +140,31 @@ fpin_els_wwn_exists(struct wwn_list *list, char *port_wwn_buf) {
 
 void
 fpin_els_display_wwn(struct wwn_list *list) {
-	struct impacted_port_wwn_list *temp = NULL;
+	struct impacted_port_wwns *temp = NULL;
 
-	if (list_empty(&(list->impacted_ports.impacted_port_wwn_head))) {
+	if (list_empty(&(list->impacted_ports_wwn_head))) {
 		FPIN_ELOG("WWN List is empty\n");
 	} else {
-		list_for_each_entry(temp, &(list->impacted_ports.impacted_port_wwn_head),
+		list_for_each_entry(temp, &(list->impacted_ports_wwn_head),
 				impacted_port_wwn_head)
 			FPIN_ILOG("WWN Imapcted is %s\n", temp->impacted_port_wwn);
 	}
 
-	FPIN_ILOG("HBA WWN is %s\n", list->hba_wwn);
+	FPIN_ILOG("Host num recvd is %d\n", list->host_num);
 }
 
 void
 fpin_els_free_wwn_list(struct wwn_list *list) {
 	struct list_head *current_node = NULL;
 	struct list_head *temp = NULL;
-	struct impacted_port_wwn_list *temp_node = NULL;
+	struct impacted_port_wwns *temp_node = NULL;
 
-	if (list_empty(&(list->impacted_ports.impacted_port_wwn_head))) {
+	if (list_empty(&(list->impacted_ports_wwn_head))) {
 		FPIN_ELOG("WWN List is empty\n");
 	} else {
 		list_for_each_safe(current_node, temp,
-			&(list->impacted_ports.impacted_port_wwn_head)) {
-			temp_node = list_entry(current_node, struct impacted_port_wwn_list,
+			&(list->impacted_ports_wwn_head)) {
+			temp_node = list_entry(current_node, struct impacted_port_wwns,
 							impacted_port_wwn_head);
 			FPIN_DLOG("Free WWN %s\n", temp_node->impacted_port_wwn);
 			list_del(current_node);
@@ -178,7 +179,7 @@ fpin_els_free_wwn_list(struct wwn_list *list) {
  *	fpin_els_extract_wwn
  *
  * Input:
- *	hba_pwwn				: The Port WWN of HBA on which the ELS was received.
+ *	host_num				: The Host# of HBA port, where the ELS was received.
  *	L.I Notification Struct	: The Link Integrity struct with impacted WWN list.
  * 	struct wwn_list *list	: The list to be populated with impacted WWN.
  *
@@ -189,7 +190,7 @@ fpin_els_free_wwn_list(struct wwn_list *list) {
  */
 
 int
-fpin_els_extract_wwn(wwn_t *hba_pwwn, fpin_link_integrity_notification_t *li,
+fpin_els_extract_wwn(uint16_t host_num, fpin_link_integrity_notification_t *li,
 						struct wwn_list *list) {
 	char  port_wwn_buf[WWN_LEN];
 	wwn_t *currentPortListOffset_p = NULL;
@@ -197,17 +198,22 @@ fpin_els_extract_wwn(wwn_t *hba_pwwn, fpin_link_integrity_notification_t *li,
 	int iter = 0, count = 0;
 
 	/* Update the wwn to list */
-	wwn_count = htonl(li->port_list.count);
+	wwn_count = ntohl(li->port_list.count);
 	FPIN_DLOG("Got wwn count as %d\n", wwn_count);
-	snprintf(list->hba_wwn, sizeof(list->hba_wwn), "0x%08x%08x",
-			htonl(hba_pwwn->words[0]), htonl(hba_pwwn->words[1]));
+	list->host_num = host_num;
 
 	currentPortListOffset_p = (wwn_t *)&(li->port_list.port_name_list);
 	for (iter = 0; iter < wwn_count; iter++) {
 		memset(port_wwn_buf, '\0', WWN_LEN);
+		/*
+		 * This data is read from FC frame, which has a mixture of
+		 * both 32 and 64 bit data. Using wwn_t as 64-bit is causing
+		 * an offset of 32 bits when used with be64toh. Hence, using
+		 * wwn_t as two 32-bit words and using ntohl instead.
+		 */
 		snprintf(port_wwn_buf, WWN_LEN, "0x%08x%08x", 
-			htonl(currentPortListOffset_p->words[0]),
-			htonl(currentPortListOffset_p->words[1]));
+			ntohl(currentPortListOffset_p->words[0]),
+			ntohl(currentPortListOffset_p->words[1]));
 		fpin_els_insert_port_wwn(list, port_wwn_buf);
 		currentPortListOffset_p++;
 		count++;
@@ -237,7 +243,7 @@ fpin_els_extract_wwn(wwn_t *hba_pwwn, fpin_link_integrity_notification_t *li,
  *		5. Free the resources allocated.
  */
 int
-fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload) {
+fpin_process_els_frame(uint16_t host_num, char *fc_payload) {
 	struct list_head dm_list_head, impacted_dev_list_head;
 	struct udev *udev = NULL;
 	fpin_link_integrity_request_els_t *fpin_req = NULL;
@@ -251,10 +257,10 @@ fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload) {
 	switch(els_cmd) {
 		case ELS_CMD_FPIN:
 			fpin_req = (fpin_link_integrity_request_els_t *)fc_payload;
-			INIT_LIST_HEAD(&list_of_wwn.impacted_ports.impacted_port_wwn_head);
+			INIT_LIST_HEAD(&list_of_wwn.impacted_ports_wwn_head);
 
 			/* Get the WWNs recieved from HBA firmware through ELS frame */
-			count = fpin_els_extract_wwn(hba_pwwn,
+			count = fpin_els_extract_wwn(host_num,
 					&(fpin_req->linkIntegrityDesc), &list_of_wwn);
 			if (count <= 0) {
 				FPIN_ELOG("Could not find any WWNs, ret = %d\n", count);
@@ -270,6 +276,7 @@ fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload) {
 				return(-1);
 			}
 
+			FPIN_DLOG("Got new udev Resource\n");
 			count = fpin_fetch_dm_lun_data(&list_of_wwn,
 					&dm_list_head, &impacted_dev_list_head, udev);
 			if (count <= 0) {
@@ -279,13 +286,10 @@ fpin_process_els_frame(wwn_t *hba_pwwn, char *fc_payload) {
 				return count;
 			}
 
+			udev_unref(udev);
 
 			/* Fail the paths using multipath daemon */
-			FPIN_DLOG("Initiator Port WWN 0x%x%x\n",
-				htonl(hba_pwwn->words[0]), htonl(hba_pwwn->words[1]));
-			fpin_dm_fail_path(udev, &dm_list_head, &impacted_dev_list_head,
-					&list_of_wwn);
-			udev_unref(udev);
+			fpin_dm_fail_path(&dm_list_head, &impacted_dev_list_head);
 
 			/* Free the WWNs list extracted from ELS recieved */
 			fpin_dm_free_dev(&impacted_dev_list_head);
@@ -348,36 +352,45 @@ fpin_handle_els_frame(fpin_payload_t *fpin_payload) {
  * list will be added if any more ELS frames types are to be supported.
  */
 void *fpin_els_li_consumer() {
+	struct list_head marginal_list_head;
 	char payload[FC_PAYLOAD_MAXLEN];
 	int ret = 0;
-	wwn_t hba_pwwn;
+	uint16_t host_num;
 	struct els_marginal_list *els_marg;
+
+	INIT_LIST_HEAD(&marginal_list_head);
 
 	for ( ; ; ) {
 		pthread_mutex_lock(&fpin_li_mutex);
-		if(list_empty(&els_marginal_list_head)) {
+		if (list_empty(&els_marginal_list_head)) {
 			pthread_cond_wait(&fpin_li_cond, &fpin_li_mutex);
 		}
-		
-		while (!list_empty(&els_marginal_list_head)) {
-			els_marg  = list_first_entry(&els_marginal_list_head,
+
+		if (!list_empty(&els_marginal_list_head)) {
+			FPIN_DLOG("Invoke List splice tail\n");
+			list_splice_tail_init(&els_marginal_list_head, &marginal_list_head);
+			pthread_mutex_unlock(&fpin_li_mutex);
+		} else {
+			FPIN_DLOG("Spurious/INTR wakeup, continue\n");
+			pthread_mutex_unlock(&fpin_li_mutex);
+			continue;
+		}
+
+		while (!list_empty(&marginal_list_head)) {
+			els_marg  = list_first_entry(&marginal_list_head,
 							struct els_marginal_list, els_frame);
 			memset(payload, '\0', FC_PAYLOAD_MAXLEN);
-			hba_pwwn = els_marg->hba_pwwn;
+			host_num = els_marg->host_num;
 			memcpy(payload, els_marg->payload, FC_PAYLOAD_MAXLEN);
 			list_del(&els_marg->els_frame);
-			pthread_mutex_unlock(&fpin_li_mutex);
 			free(els_marg);
 
 			/* Now finally process FPIN LI ELS Frame */
 			FPIN_ILOG("Got a new Payload buffer, processing it\n");
-			ret = fpin_process_els_frame(&hba_pwwn, payload);
+			ret = fpin_process_els_frame(host_num, payload);
 			if (ret <= 0 ) {
 				FPIN_ELOG("ELS frame processing failed with ret %d\n", ret);
 			}
-			pthread_mutex_lock(&fpin_li_mutex);			
-
 		}
-		pthread_mutex_unlock(&fpin_li_mutex);
 	}
 }

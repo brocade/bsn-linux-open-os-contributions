@@ -22,12 +22,15 @@
  * OF THIS SOFTWARE.
  *
  * Authors:
- *      Ganesh Murugesan <ganesh.murugesan@broadcom.com>
  *      Ganesh Pai <ganesh.pai@broadcom.com>
+ *      Muneendra Kumar <muneendra.kumar@broadcom.com>
  */
 
 #include "fpin.h"
-extern struct fpin_global global;
+
+pthread_cond_t fpin_li_marginal_dev_cond = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t fpin_li_marginal_dev_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 /*
  * Function:
  * 	fpin_insert_dm(struct list_head *dm_list_head, char *dm_name,
@@ -44,11 +47,12 @@ extern struct fpin_global global;
  * 	fail the path using multipath daemon.
  */
 int
-fpin_insert_dm(struct list_head *dm_list_head, char *dm_name,
-				char *dm_node, char *uid_name) {
-	struct dm_dev_list *new_node = NULL;
+fpin_insert_dm(struct list_head *dm_list_head, const char *dm_name,
+			const char *dm_node, const char *uid_name) {
+	struct dm_devs *new_node = NULL;
 	char *uid_ptr = NULL;
 	int dm_name_len = 0, dm_node_len = 0, uid_name_len = 0;
+
 	dm_name_len = strlen(dm_name);
 	dm_node_len = strlen(dm_node);
 	uid_name_len = strlen(uid_name);
@@ -63,11 +67,15 @@ fpin_insert_dm(struct list_head *dm_list_head, char *dm_name,
 	}
 
 	/* Create a node */
-	new_node = (struct dm_dev_list*) malloc(sizeof(struct dm_dev_list));
+	new_node = (struct dm_devs *) malloc(sizeof(struct dm_devs));
 	if (new_node != NULL) {
 		/* Set values in new node */
 		strncpy(new_node->dm_name, dm_name, (DEV_NAME_LEN - 1));
 		strncpy(new_node->dm_dev_node, dm_node, (DEV_NAME_LEN - 1));
+		/*
+		 * Checking with only a '-' as this function is onvoked only
+		 * if uid_name has mpath- string in it.
+		 */
 		uid_ptr = (strchr(uid_name, '-') + 1);
 		if (uid_ptr != NULL) {
 			strncpy(new_node->dm_uuid, uid_ptr, (UUID_LEN - 1));
@@ -106,40 +114,34 @@ fpin_insert_dm(struct list_head *dm_list_head, char *dm_name,
  * 	fail the path using multipath daemon.
  */
 int
-fpin_insert_sd(struct list_head *impacted_dev_list_head, char *dev_name,
-			char *sd_node, char *serial_id, char *dev_wwn, char *sd_path) {
-	struct impacted_dev_list *new_node = NULL;
+fpin_insert_sd(struct list_head *impacted_dev_list_head, const char *dev_name,
+			char *sd_node, const char *serial_id) {
+	struct impacted_devs *new_node = NULL;
 	int dev_name_len = 0, sd_node_len = 0, serial_id_len = 0, sd_path_len = 0;
-//#MMK
+
 	dev_name_len = strlen(dev_name);
 	sd_node_len = strlen(sd_node);
 	serial_id_len = strlen(serial_id);
-	sd_path_len = strlen(sd_path);	
 
 	if ((dev_name_len > (DEV_NAME_LEN - 1)) ||
 		(sd_node_len > (DEV_NAME_LEN - 1)) ||
-		(serial_id_len > (UUID_LEN - 1)) ||
-		(sd_path_len > (SYS_PATH_LEN - 1))) {
+		(serial_id_len > (UUID_LEN - 1))) {
 		FPIN_ELOG("Failed to add %s : %s, params exceed buffer length "
-			"dev_name_len %d, node_len %d, serial_id_len %d, sd_path_len %d\n",
-			dev_name, sd_node, dev_name_len, sd_node_len,
-			serial_id_len, sd_path_len);
+			"dev_name_len %d, node_len %d, serial_id_len %d\n",
+			dev_name, sd_node, dev_name_len, sd_node_len, serial_id_len);
 		return (-EINVAL);
 	}
 
 	/* Create a node */
-	new_node = (struct impacted_dev_list*)
-				malloc(sizeof(struct impacted_dev_list));
+	new_node = (struct impacted_devs*)
+				malloc(sizeof(struct impacted_devs));
 	if (new_node != NULL) {
 		/* Set values in new node */
 		strncpy(new_node->dev_name, dev_name, (DEV_NAME_LEN - 1));
 		strncpy(new_node->dev_node, sd_node, (DEV_NAME_LEN - 1));
 		strncpy(new_node->dev_serial_id, serial_id,(UUID_LEN - 1));
-		strncpy(new_node->dev_pwwn, dev_wwn, (WWN_LEN - 1));
-		strncpy(new_node->sd_path, sd_path, (SYS_PATH_LEN - 1));
-		FPIN_ILOG("Inserted %s : %s : %s : %s into sd list\n",
-			new_node->dev_name, new_node->dev_node,
-			new_node->dev_serial_id, new_node->dev_pwwn);
+		FPIN_ILOG("Inserted %s : %s : %s into sd list\n",
+			new_node->dev_name, new_node->dev_node,	new_node->dev_serial_id);
 		list_add_tail(&(new_node->dev_list_head), impacted_dev_list_head);
 	} else {
 		FPIN_ELOG("Failed to add %s : %s, OOM\n",
@@ -162,30 +164,25 @@ fpin_insert_sd(struct list_head *impacted_dev_list_head, char *dev_name,
  * 	This function inserts the target name to a list of impacted targets.
  */
 int
-fpin_dm_insert_target(struct list_head *tgt_list_head,
-					char *target, char *tgt_wwn) {
-	struct target_list *new_node = NULL;
-	int tgt_name_len = 0, tgt_wwn_len = 0;
+fpin_dm_insert_target(struct list_head *tgt_list_head, const char *target) {
+
+	struct targets *new_node = NULL;
+	int tgt_name_len = 0;
 
 	tgt_name_len = strlen(target);
-	tgt_wwn_len = strlen(tgt_wwn);
 
-	if ((tgt_name_len > (TGT_NAME_LEN - 1)) ||
-		(tgt_wwn_len > (WWN_LEN - 1))) {
+	if (tgt_name_len > (TGT_NAME_LEN - 1)) {
 		FPIN_ELOG("Failed to insert tgt %s, buffer length exceeded "
-			"tgt_name_len %d, tgt_wwn %s, tgt_wwn_len %d\n",
-			target, tgt_name_len, tgt_wwn, tgt_wwn_len);
+			"tgt_name_len %d\n", target, tgt_name_len);
 		return (-EINVAL);
 	}
 
 	/* Create a node */
-	new_node = (struct target_list*) malloc(sizeof(struct target_list));
+	new_node = (struct targets *) malloc(sizeof(struct targets));
 	if (new_node != NULL) {
 		/* Set values in new node */
 		strncpy(new_node->target, target, (TGT_NAME_LEN - 1));
-		strncpy(new_node->tgt_pwwn, tgt_wwn, (WWN_LEN - 1));
-		FPIN_ILOG("Inserted %s : %s into target list\n",
-			new_node->target, new_node->tgt_pwwn);
+		FPIN_ILOG("Inserted %s into target list\n", new_node->target);
 		list_add_tail(&(new_node->target_head), tgt_list_head);
 	} else {
 		FPIN_CLOG("Failed to insert target %s, OOM\n", target);
@@ -197,7 +194,7 @@ fpin_dm_insert_target(struct list_head *tgt_list_head,
 
 void
 fpin_display_dm_list(struct list_head *list_head) {
-	struct dm_dev_list *temp = NULL;
+	struct dm_devs *temp = NULL;
 	if (list_empty(list_head)) {
 		FPIN_DLOG("DM list is empty, not failing any sd\n");
 	} else {
@@ -210,7 +207,7 @@ fpin_display_dm_list(struct list_head *list_head) {
 
 void
 fpin_display_impacted_dev_list(struct list_head *list_head) {
-	struct impacted_dev_list *temp = NULL;
+	struct impacted_devs *temp = NULL;
 	if (list_empty(list_head)) {
 		FPIN_DLOG("DM list is empty, not failing any sd\n");
 	} else {
@@ -242,7 +239,7 @@ fpin_display_impacted_dev_list(struct list_head *list_head) {
 int
 fpin_fetch_dm_for_sd(struct list_head *dm_head,
 				char *dev_serial_id, char **impacted_dm) {
-	struct dm_dev_list *dm = NULL;
+	struct dm_devs *dm = NULL;
 	int found = -1;
 
 	if (list_empty(dm_head)) {
@@ -337,34 +334,6 @@ int fpin_dm_get_active_path_count(char *dm_status) {
 	return(count);
 }
 
-static int
-flush_pending_io(struct wwn_list *list, struct impacted_dev_list *temp) {
-	char cmd[CMD_LEN], dm_status[DM_PARAMS_SIZE];
-	char file_name[FILE_PATH_LEN];
-	int fd = -1, ret = 0;
-	/*
-	 * Now push the I-T WWN pair to SCSI transport layer to flush
-	 * pending I/O.
-	 */
-	snprintf(file_name, (SYS_PATH_LEN - 1), "%s/%s",
-					list->hba_syspath, IO_FLUSH_ATTR);
-	if ((fd = open(file_name, O_WRONLY)) < 0) {
-			FPIN_ELOG("Failed to open intf for %s\n", temp->dev_name);
-			return (fd);
-	}
-
-	memset(cmd, '\0', CMD_LEN);
-	snprintf(cmd, (CMD_LEN - 1), "%s:%s",
-					list->hba_wwn+2, temp->dev_pwwn+2);
-	FPIN_DLOG("Sending %s to backend %s\n", cmd, file_name);
-	if ((ret = write(fd, cmd, strlen(cmd))) < 0) {
-			FPIN_ELOG("Failed to update the backend for %s %s %d\n",
-							__func__,temp->dev_name, ret);
-			return (ret);
-	}
-	close(fd);
-	return (ret);
-}
 /*
  * Function:
  * 	fpin_dm_fail_path
@@ -380,15 +349,13 @@ flush_pending_io(struct wwn_list *list, struct impacted_dev_list *temp) {
  * 	and fails the path only if there is at least one other active path present.
  */
 void
-fpin_dm_fail_path(struct udev *udev, struct list_head *dm_list_head,
-			struct list_head *impacted_dev_list_head,
-			struct wwn_list *list) {
-	struct udev_device *dev = NULL, *parent_dev = NULL;
-	struct impacted_dev_list *temp = NULL;
+fpin_dm_fail_path(struct list_head *dm_list_head,
+			struct list_head *impacted_dev_list_head) {
+	struct impacted_devs *temp = NULL;
 	char *impacted_dm = NULL;
 	char cmd[CMD_LEN], dm_status[DM_PARAMS_SIZE];
-	char file_name[FILE_PATH_LEN];
 	int ret = -1, fd = -1;
+
 	if (list_empty(dm_list_head)) {
 		FPIN_ELOG("DM list is empty, not failing any sd\n");
 		return;
@@ -398,6 +365,7 @@ fpin_dm_fail_path(struct udev *udev, struct list_head *dm_list_head,
 		FPIN_ELOG("SD List is empty, not failing any sd\n");
 		return;
 	}
+
 	list_for_each_entry(temp, impacted_dev_list_head, dev_list_head) {
 		ret = fpin_fetch_dm_for_sd(dm_list_head,
 				temp->dev_serial_id, &impacted_dm);
@@ -413,42 +381,12 @@ fpin_dm_fail_path(struct udev *udev, struct list_head *dm_list_head,
 			ret = fpin_dm_get_active_path_count(dm_status);
 			if (ret > 1) {
 				/* 
-				 * Fail the impacted Path
+				 * Fail the impacted Path in DM
 				 */
 				FPIN_ILOG("Failing %s:%s\n", temp->dev_node, temp->dev_name);
 				snprintf(cmd, (CMD_LEN - 1), "multipathd fail path %s",
 					temp->dev_name);
 				system(cmd);
-				/*
-				 * Move the i/o in the marginal path device queue into
-				 * alterante active path  bysetting the device state
-				 * to "transport-offline"
-				 */
-				snprintf(file_name, (FILE_PATH_LEN - 1), "%s/%s",
-					temp->sd_path, "device/state");
-				if ((fd = open(file_name, O_WRONLY)) < 0) {
-					FPIN_ELOG("Failed to open intf for %s\n", temp->dev_name);
-					continue;
-				}
-
-				memset(cmd, '\0', CMD_LEN);
-				snprintf(cmd, (CMD_LEN - 1), "%s", "transport-offline\n");
-				FPIN_DLOG("Writing %s to %s\n", cmd, file_name);
-				if ((ret = write(fd, cmd, strlen(cmd))) < 0) {
-					FPIN_ELOG("Failed to update the backend for transport-offline  %s %d\n",
-								temp->dev_name, ret);
-				}
-				flush_pending_io(list, temp);
-				/* Temporary Sleep, will be replaced with timers */
-				sleep(5);
-				memset(cmd, '\0', CMD_LEN);
-				snprintf(cmd, (CMD_LEN - 1), "%s", "running\n");
-				FPIN_DLOG("Writing %s to %s\n", cmd, file_name);
-				if ((ret = write(fd, cmd, strlen(cmd))) < 0) {
-					FPIN_ELOG("Failed to update the backend for running  %s %d\n",
-								temp->dev_name, ret);
-				}
-				close(fd);
 			} else {
 				FPIN_ELOG("Not Failing %s, not enough Active paths\n",
 					temp->dev_name);
@@ -460,7 +398,7 @@ fpin_dm_fail_path(struct udev *udev, struct list_head *dm_list_head,
 
 void
 fpin_dm_display_target(struct list_head *tgt_head) {
-	struct target_list *temp = NULL;
+	struct targets *temp = NULL;
 
 	if (list_empty(tgt_head)) {
 		FPIN_DLOG("Target List is empty\n");
@@ -471,8 +409,8 @@ fpin_dm_display_target(struct list_head *tgt_head) {
 }
 
 int
-fpin_dm_find_target(struct list_head *tgt_head, char *target, char **tgt_wwn) {
-	struct target_list *temp = NULL;
+fpin_dm_find_target(struct list_head *tgt_head, const char *target) {
+	struct targets *temp = NULL;
 	int found  = 0;
 
 	if (list_empty(tgt_head)) {
@@ -488,7 +426,6 @@ fpin_dm_find_target(struct list_head *tgt_head, char *target, char **tgt_wwn) {
 			 */
 			if (strcmp(temp->target, target) == 0) {
 				FPIN_DLOG("Found Target %s\n", target);
-				*tgt_wwn = temp->tgt_pwwn;
 				found = 1;
 				return (found);
 			}
@@ -502,13 +439,13 @@ void
 fpin_free_dm(struct list_head *dm_head) {
 	struct list_head *current_node = NULL;
 	struct list_head *temp = NULL;
-	struct dm_dev_list *tmp_dm = NULL;
+	struct dm_devs *tmp_dm = NULL;
 	if (list_empty(dm_head)) {
 		FPIN_DLOG("List is empty, nothing to delete..\n");
 		return;
 	} else {
 		list_for_each_safe(current_node, temp, dm_head) {
-			tmp_dm = list_entry(current_node, struct dm_dev_list, dm_list_head);
+			tmp_dm = list_entry(current_node, struct dm_devs, dm_list_head);
 			FPIN_DLOG("Free dm %s\n", tmp_dm->dm_dev_node);
 			list_del(current_node);
 			free(tmp_dm);
@@ -520,13 +457,13 @@ void
 fpin_dm_free_target(struct list_head *tgt_head) {
 	struct list_head *current_node = NULL;
 	struct list_head *temp = NULL;
-	struct target_list *tmp_tgt = NULL;
+	struct targets *tmp_tgt = NULL;
 	if (list_empty(tgt_head)) {
 		FPIN_DLOG("List is empty, nothing to delete..\n");
 		return;
 	} else {
 		list_for_each_safe(current_node, temp, tgt_head) {
-			tmp_tgt = list_entry(current_node, struct target_list, target_head);
+			tmp_tgt = list_entry(current_node, struct targets, target_head);
 			FPIN_DLOG("Free target %s\n", tmp_tgt->target);
 			list_del(current_node);
 			free(tmp_tgt);
@@ -538,13 +475,13 @@ void
 fpin_dm_free_dev(struct  list_head *sd_head) {
 	struct list_head *current_node = NULL;
 	struct list_head *temp = NULL;
-	struct impacted_dev_list *tmp_sd = NULL;
+	struct impacted_devs *tmp_sd = NULL;
 	if (list_empty(sd_head)) {
 		FPIN_DLOG("List is empty, nothing to delete..\n");
 		return;
 	} else {
 		list_for_each_safe(current_node, temp, sd_head) {
-			tmp_sd = list_entry(current_node, struct impacted_dev_list, dev_list_head);
+			tmp_sd = list_entry(current_node, struct impacted_devs, dev_list_head);
 			FPIN_DLOG("Free sd %s\n", tmp_sd->dev_name);
 			list_del(current_node);
 			free(tmp_sd);
@@ -571,6 +508,7 @@ fpin_fetch_dm_lun_data(struct wwn_list *list, struct list_head *dm_list_head,
 	struct list_head impacted_tgt_list_head;
 	int ret = -1;
 
+	FPIN_DLOG("Get DM Lun Data\n");
 	INIT_LIST_HEAD(&impacted_tgt_list_head);
 	/* Get Targets linked to the port on whichthe ELS frame was recieved */
 	ret = fpin_dm_populate_target(list, &impacted_tgt_list_head, udev);
@@ -579,6 +517,7 @@ fpin_fetch_dm_lun_data(struct wwn_list *list, struct list_head *dm_list_head,
 		return (ret);
 	}
 
+	FPIN_DLOG("Display target\n");
 	fpin_dm_display_target(&impacted_tgt_list_head);
 
 	/* Get sd to dm mapping for populated targets */
@@ -615,8 +554,8 @@ int
 fpin_dm_populate_target(struct wwn_list *list, struct list_head *tgt_list,
 			struct udev *udev) {
 
-	char dir_path_buf[SYS_PATH_LEN], target_buf[DEV_NODE_LEN];
-	char port_wwn_buf[WWN_LEN], host_buf[DEV_NODE_LEN];
+	char host_buf[DEV_NODE_LEN];
+	char *host_name_ptr = NULL;
 	int target_count = 0, host_found = 0, wwn_exists = 0;
 	struct udev_enumerate *enumerate = NULL;
 	struct udev_list_entry *devices = NULL, *dev_list_entry = NULL;
@@ -648,42 +587,41 @@ fpin_dm_populate_target(struct wwn_list *list, struct list_head *tgt_list,
 		udev_enumerate_unref(enumerate);
 		return(-ENODEV);
 	}
+
 	/* For each item enumerated, find if the target matches.
 	 * fetch port_name and compare it with the HBA PWWN in ELS.
 	 * Whichever matches, store the sys_name
 	 */
-	FPIN_DLOG("HBA PWWN = %s\n", list->hba_wwn);
+	snprintf(host_buf, DEV_NODE_LEN, "%s%d", "host", list->host_num);
 	udev_list_entry_foreach(dev_list_entry, devices) {
-		snprintf(dir_path_buf, sizeof(dir_path_buf), "%s",
-			udev_list_entry_get_name(dev_list_entry));
-		dev = udev_device_new_from_syspath(udev, dir_path_buf);
-		if (dev == NULL) {
-			FPIN_ELOG("Failed to get host device struct from path %s, err %d\n",
-						dir_path_buf, errno);
+		const char *dir_path_buf;
+		dir_path_buf = udev_list_entry_get_name(dev_list_entry);
+		if (dir_path_buf == NULL) {
+			FPIN_ELOG("Failed to get syspath for host %s\n", host_buf);
 			continue;
 		}
 
-		FPIN_DLOG("Got host as %s\n", udev_device_get_sysname(dev));
-		snprintf(port_wwn_buf, sizeof(port_wwn_buf), "%s", 
-			udev_device_get_sysattr_value(dev, "port_name"));
-		FPIN_DLOG("Got Port WWN as %s\n", port_wwn_buf);
-		if (strncmp(port_wwn_buf, list->hba_wwn, strlen(port_wwn_buf)) == 0) {
-			snprintf(host_buf, sizeof(host_buf), "%s",
-				udev_device_get_sysname(dev));
-			host_found = 1;
-			snprintf(list->hba_syspath, SYS_PATH_LEN, "%s", dir_path_buf);
-			FPIN_DLOG("Got syspath as %s\n", list->hba_syspath);
-			udev_device_unref(dev);
-			break;
+		FPIN_DLOG("Got Sys path as %s\n", dir_path_buf);
+		host_name_ptr = strrchr(dir_path_buf, '/');
+		if (host_name_ptr == NULL) {
+			FPIN_ELOG("Failed to get host name from path %s\n", dir_path_buf);
+			continue;
 		}
 
-		udev_device_unref(dev);
+		host_name_ptr++;
+
+		FPIN_DLOG("Checking for host %s\n", host_buf);
+		/* Both Strings are NULL terminated */
+		if (strcmp(host_name_ptr, host_buf) == 0) {
+			host_found = 1;
+			break;
+		}
 	}
 
 	/* Free the enumerator object */
 	udev_enumerate_unref(enumerate);
 	if (host_found == 0) {
-		FPIN_ELOG("Could not find any host for HBA pwn %s\n", list->hba_wwn);
+		FPIN_ELOG("Could not find any host with %d\n", list->host_num);
 		return (0);
 	}
 
@@ -722,8 +660,13 @@ fpin_dm_populate_target(struct wwn_list *list, struct list_head *tgt_list,
 	 * Whichever matches, store the sys_name
 	 */
 	udev_list_entry_foreach(dev_list_entry, devices) {
-		snprintf(dir_path_buf, sizeof(dir_path_buf), "%s",
-					udev_list_entry_get_name(dev_list_entry));
+		const char *dir_path_buf, *target_buf, *port_wwn_buf;
+		dir_path_buf = udev_list_entry_get_name(dev_list_entry);
+		if (dir_path_buf == NULL) {
+			FPIN_ELOG("Failed to get syspath for targets\n");
+			continue;
+		}
+
 		dev = udev_device_new_from_syspath(udev, dir_path_buf);
 		if (dev == NULL) {
 			FPIN_ELOG("Failed to get device struct from path %s, err %d\n",
@@ -739,22 +682,29 @@ fpin_dm_populate_target(struct wwn_list *list, struct list_head *tgt_list,
 			continue;
 		}
 
-		snprintf(target_buf, sizeof(target_buf), "%s",
-						udev_device_get_sysname(dev));
+		target_buf = udev_device_get_sysname(dev);
+		if (target_buf == NULL) {
+			FPIN_ELOG("Unable to get tgt sysname from host %s\n", host_buf);
+			continue;
+		}
+
 		FPIN_DLOG("Got Port Target_buf as %s\n", target_buf);
 		/*
 		 * Intentionally using strcmp as both strings are confirmed
 		 * to be NULL terminated. We do not want to match host1 with host10.
 		 */
 		if (strcmp(host_buf, udev_device_get_sysname(parent_dev)) == 0) {
-			snprintf(port_wwn_buf, sizeof(port_wwn_buf), "%s", 
-						udev_device_get_sysattr_value(dev, "port_name"));
+			port_wwn_buf = udev_device_get_sysattr_value(dev, "port_name");
+			if (port_wwn_buf == NULL) {
+				FPIN_ELOG("Could not get tgt WWN for %s\n", host_buf);
+				continue;
+			}
+
 			FPIN_DLOG("Got tgt WWN as %s\n", port_wwn_buf);
 			wwn_exists = fpin_els_wwn_exists(list, port_wwn_buf);
 			if (wwn_exists) {
 				FPIN_DLOG("Found a target %s %s\n", target_buf, port_wwn_buf);
-				if ((fpin_dm_insert_target(tgt_list, target_buf,
-												port_wwn_buf)) == 0) {
+				if ((fpin_dm_insert_target(tgt_list, target_buf)) == 0) {
 					target_count ++;
 				}
 			}
@@ -787,10 +737,7 @@ int
 fpin_populate_dm_lun(struct list_head *dm_list_head,
 			struct list_head *impacted_dev_list_head,
 			struct udev *udev, struct list_head *target_head) {
-	char dir_path_buf[SYS_PATH_LEN], lun_buf[DEV_NODE_LEN];
-	char dm_buf[DEV_NODE_LEN], target_buf[DEV_NODE_LEN];
-	char dev_buf[DEV_NODE_LEN] , uid_buf[UUID_LEN];
-	char *tgt_wwn = NULL;
+	char lun_buf[DEV_NODE_LEN];
 	int wwn_exists = 0, dm_count = 0;
 	int sd_count = 0, ret = 0;
 
@@ -832,9 +779,10 @@ fpin_populate_dm_lun(struct list_head *dm_list_head,
 	 * Whichever matches, store the sys_name
 	 */
 	FPIN_DLOG("Looping over Block...\n");
-	udev_list_entry_foreach(dev_list_entry, devices) { 
-		snprintf(dir_path_buf, sizeof(dir_path_buf), "%s",
-			udev_list_entry_get_name(dev_list_entry));
+	udev_list_entry_foreach(dev_list_entry, devices) {
+		const char *dir_path_buf, *dm_buf, *dev_buf;
+		const char *target_buf, *uid_buf;
+		dir_path_buf = udev_list_entry_get_name(dev_list_entry);
 		dev = udev_device_new_from_syspath(udev, dir_path_buf);
 		if (dev == NULL) {
 			FPIN_ELOG("Failed to get device struct from path %s, err %d\n",
@@ -842,15 +790,12 @@ fpin_populate_dm_lun(struct list_head *dm_list_head,
 			continue;
 		}
 		/* Handle DMs */
-		snprintf(dev_buf, sizeof(dev_buf), "%s",
-			udev_device_get_sysname(dev));
+		dev_buf = udev_device_get_sysname(dev);
 		FPIN_DLOG("Got dev_name as %s\n", dev_buf);
 		if (strncmp("dm-", dev_buf, 3) == 0) {
-			snprintf(dm_buf, sizeof(dm_buf), "%s",
-				udev_device_get_property_value(dev, "DM_NAME"));
+			dm_buf = udev_device_get_property_value(dev, "DM_NAME");
 			if (strncmp("mpath", dm_buf, 5) == 0) {
-				snprintf(uid_buf, sizeof(uid_buf), "%s",
-					udev_device_get_property_value(dev, "DM_UUID"));
+				uid_buf = udev_device_get_property_value(dev, "DM_UUID");
 				ret = fpin_insert_dm(dm_list_head, dev_buf, dm_buf, uid_buf);
 				if (ret < 0) {
 					FPIN_ELOG("Failed to Insert %s : %s\n", dev_buf, dm_buf);
@@ -867,25 +812,23 @@ fpin_populate_dm_lun(struct list_head *dm_list_head,
 			parent_dev = udev_device_get_parent_with_subsystem_devtype(
 				dev, "scsi", "scsi_target");
 			if (!parent_dev) {
-				FPIN_ELOG("Unable to find parent usb device for %s\n",
+				FPIN_ELOG("Unable to find parent device for %s\n",
 					udev_device_get_sysname(dev));
 				udev_device_unref(dev);
 				continue;
 			}
 
-			snprintf(target_buf, sizeof(target_buf), "%s",
-				udev_device_get_sysname(parent_dev));
+			target_buf = udev_device_get_sysname(parent_dev);
 			FPIN_ILOG("###Got target_buf as %s\n", target_buf);
 
-			if (fpin_dm_find_target(target_head, target_buf, &tgt_wwn) != 0) {
+			if (fpin_dm_find_target(target_head, target_buf) != 0) {
 				snprintf(lun_buf, sizeof(lun_buf), "%s:%s",
 					udev_device_get_property_value(dev, "MAJOR"),
 					udev_device_get_property_value(dev, "MINOR"));
-				snprintf(uid_buf, sizeof(uid_buf), "%s",
-					udev_device_get_property_value(dev, "ID_SERIAL"));
+				uid_buf = udev_device_get_property_value(dev, "ID_SERIAL");
 				FPIN_ILOG("###Attempting %s, %s\n", lun_buf, uid_buf);
 				ret = fpin_insert_sd(impacted_dev_list_head, dev_buf,
-					lun_buf, uid_buf, tgt_wwn, dir_path_buf);
+					lun_buf, uid_buf);
 				if (ret < 0) {
 					FPIN_ELOG("Failed to insert %s %s to sd list\n",
 							dev_buf, lun_buf);

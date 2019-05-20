@@ -53,9 +53,6 @@ Steps performed during daemon execution:
 
 To Be Done: (Used as TBD in code)
 1.	Daemon startup sequence. To be worked with Redhat.
-2.	Standardize FPIN-LI ELS frame structure in FC Standards.
-3.	FCTXPD daemon registeration with FC fabric, so that Fabric is aware that it
-	can send FPIN-LI frames to the host.
 
 Steps to compile:
 Please install udev,pthread ,devmapper libraries before we start compiling.
