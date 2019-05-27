@@ -25,7 +25,8 @@ static int pmsr_parse_ftm(struct cfg80211_registered_device *rdev,
 	}
 
 	/* no validation needed - was already done via nested policy */
-	nla_parse_nested(tb, NL80211_PMSR_FTM_REQ_ATTR_MAX, ftmreq, NULL, NULL);
+	nla_parse_nested_deprecated(tb, NL80211_PMSR_FTM_REQ_ATTR_MAX, ftmreq,
+				    NULL, NULL);
 
 	if (tb[NL80211_PMSR_FTM_REQ_ATTR_PREAMBLE])
 		preamble = nla_get_u32(tb[NL80211_PMSR_FTM_REQ_ATTR_PREAMBLE]);
@@ -139,7 +140,8 @@ static int pmsr_parse_peer(struct cfg80211_registered_device *rdev,
 	int err, rem;
 
 	/* no validation needed - was already done via nested policy */
-	nla_parse_nested(tb, NL80211_PMSR_PEER_ATTR_MAX, peer, NULL, NULL);
+	nla_parse_nested_deprecated(tb, NL80211_PMSR_PEER_ATTR_MAX, peer,
+				    NULL, NULL);
 
 	if (!tb[NL80211_PMSR_PEER_ATTR_ADDR] ||
 	    !tb[NL80211_PMSR_PEER_ATTR_CHAN] ||
@@ -154,9 +156,9 @@ static int pmsr_parse_peer(struct cfg80211_registered_device *rdev,
 	/* reuse info->attrs */
 	memset(info->attrs, 0, sizeof(*info->attrs) * (NL80211_ATTR_MAX + 1));
 	/* need to validate here, we don't want to have validation recursion */
-	err = nla_parse_nested(info->attrs, NL80211_ATTR_MAX,
-			       tb[NL80211_PMSR_PEER_ATTR_CHAN],
-			       nl80211_policy, info->extack);
+	err = nla_parse_nested_deprecated(info->attrs, NL80211_ATTR_MAX,
+					  tb[NL80211_PMSR_PEER_ATTR_CHAN],
+					  nl80211_policy, info->extack);
 	if (err)
 		return err;
 
@@ -165,9 +167,9 @@ static int pmsr_parse_peer(struct cfg80211_registered_device *rdev,
 		return err;
 
 	/* no validation needed - was already done via nested policy */
-	nla_parse_nested(req, NL80211_PMSR_REQ_ATTR_MAX,
-			 tb[NL80211_PMSR_PEER_ATTR_REQ],
-			 NULL, NULL);
+	nla_parse_nested_deprecated(req, NL80211_PMSR_REQ_ATTR_MAX,
+				    tb[NL80211_PMSR_PEER_ATTR_REQ], NULL,
+				    NULL);
 
 	if (!req[NL80211_PMSR_REQ_ATTR_DATA]) {
 		NL_SET_ERR_MSG_ATTR(info->extack,
@@ -256,9 +258,8 @@ int nl80211_pmsr_start(struct sk_buff *skb, struct genl_info *info)
 		if (err)
 			goto out_err;
 	} else {
-		memcpy(req->mac_addr, nla_data(info->attrs[NL80211_ATTR_MAC]),
-		       ETH_ALEN);
-		memset(req->mac_addr_mask, 0xff, ETH_ALEN);
+		memcpy(req->mac_addr, wdev_address(wdev), ETH_ALEN);
+		eth_broadcast_addr(req->mac_addr_mask);
 	}
 
 	idx = 0;
@@ -272,6 +273,7 @@ int nl80211_pmsr_start(struct sk_buff *skb, struct genl_info *info)
 
 	req->n_peers = count;
 	req->cookie = cfg80211_assign_cookie(rdev);
+	req->nl_portid = info->snd_portid;
 
 	err = rdev_start_pmsr(rdev, wdev, req);
 	if (err)
@@ -420,22 +422,22 @@ static int nl80211_pmsr_send_result(struct sk_buff *msg,
 {
 	struct nlattr *pmsr, *peers, *peer, *resp, *data, *typedata;
 
-	pmsr = nla_nest_start(msg, NL80211_ATTR_PEER_MEASUREMENTS);
+	pmsr = nla_nest_start_noflag(msg, NL80211_ATTR_PEER_MEASUREMENTS);
 	if (!pmsr)
 		goto error;
 
-	peers = nla_nest_start(msg, NL80211_PMSR_ATTR_PEERS);
+	peers = nla_nest_start_noflag(msg, NL80211_PMSR_ATTR_PEERS);
 	if (!peers)
 		goto error;
 
-	peer = nla_nest_start(msg, 1);
+	peer = nla_nest_start_noflag(msg, 1);
 	if (!peer)
 		goto error;
 
 	if (nla_put(msg, NL80211_PMSR_PEER_ATTR_ADDR, ETH_ALEN, res->addr))
 		goto error;
 
-	resp = nla_nest_start(msg, NL80211_PMSR_PEER_ATTR_RESP);
+	resp = nla_nest_start_noflag(msg, NL80211_PMSR_PEER_ATTR_RESP);
 	if (!resp)
 		goto error;
 
@@ -452,11 +454,11 @@ static int nl80211_pmsr_send_result(struct sk_buff *msg,
 	if (res->final && nla_put_flag(msg, NL80211_PMSR_RESP_ATTR_FINAL))
 		goto error;
 
-	data = nla_nest_start(msg, NL80211_PMSR_RESP_ATTR_DATA);
+	data = nla_nest_start_noflag(msg, NL80211_PMSR_RESP_ATTR_DATA);
 	if (!data)
 		goto error;
 
-	typedata = nla_nest_start(msg, res->type);
+	typedata = nla_nest_start_noflag(msg, res->type);
 	if (!typedata)
 		goto error;
 
@@ -530,13 +532,13 @@ free:
 }
 EXPORT_SYMBOL_GPL(cfg80211_pmsr_report);
 
-void cfg80211_pmsr_free_wk(struct work_struct *work)
+static void cfg80211_pmsr_process_abort(struct wireless_dev *wdev)
 {
-	struct wireless_dev *wdev = container_of(work, struct wireless_dev,
-						 pmsr_free_wk);
 	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wdev->wiphy);
 	struct cfg80211_pmsr_request *req, *tmp;
 	LIST_HEAD(free_list);
+
+	lockdep_assert_held(&wdev->mtx);
 
 	spin_lock_bh(&wdev->pmsr_lock);
 	list_for_each_entry_safe(req, tmp, &wdev->pmsr_list, list) {
@@ -547,12 +549,20 @@ void cfg80211_pmsr_free_wk(struct work_struct *work)
 	spin_unlock_bh(&wdev->pmsr_lock);
 
 	list_for_each_entry_safe(req, tmp, &free_list, list) {
-		wdev_lock(wdev);
 		rdev_abort_pmsr(rdev, wdev, req);
-		wdev_unlock(wdev);
 
 		kfree(req);
 	}
+}
+
+void cfg80211_pmsr_free_wk(struct work_struct *work)
+{
+	struct wireless_dev *wdev = container_of(work, struct wireless_dev,
+						 pmsr_free_wk);
+
+	wdev_lock(wdev);
+	cfg80211_pmsr_process_abort(wdev);
+	wdev_unlock(wdev);
 }
 
 void cfg80211_pmsr_wdev_down(struct wireless_dev *wdev)
@@ -568,8 +578,8 @@ void cfg80211_pmsr_wdev_down(struct wireless_dev *wdev)
 	spin_unlock_bh(&wdev->pmsr_lock);
 
 	if (found)
-		schedule_work(&wdev->pmsr_free_wk);
-	flush_work(&wdev->pmsr_free_wk);
+		cfg80211_pmsr_process_abort(wdev);
+
 	WARN_ON(!list_empty(&wdev->pmsr_list));
 }
 

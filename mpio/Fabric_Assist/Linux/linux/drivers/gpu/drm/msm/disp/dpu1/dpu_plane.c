@@ -95,8 +95,6 @@ struct dpu_plane {
 
 	enum dpu_sspp pipe;
 	uint32_t features;      /* capabilities from catalog */
-	uint32_t nformats;
-	uint32_t formats[64];
 
 	struct dpu_hw_pipe *pipe_hw;
 	struct dpu_hw_pipe_cfg pipe_cfg;
@@ -119,6 +117,12 @@ struct dpu_plane {
 	struct dpu_debugfs_regset32 debugfs_scaler;
 	struct dpu_debugfs_regset32 debugfs_csc;
 	bool debugfs_default_scale;
+};
+
+static const uint64_t supported_format_modifiers[] = {
+	DRM_FORMAT_MOD_QCOM_COMPRESSED,
+	DRM_FORMAT_MOD_LINEAR,
+	DRM_FORMAT_MOD_INVALID
 };
 
 #define to_dpu_plane(x) container_of(x, struct dpu_plane, base)
@@ -365,19 +369,6 @@ static void _dpu_plane_set_qos_ctrl(struct drm_plane *plane,
 			&pdpu->pipe_qos_cfg);
 }
 
-static void dpu_plane_danger_signal_ctrl(struct drm_plane *plane, bool enable)
-{
-	struct dpu_plane *pdpu = to_dpu_plane(plane);
-	struct dpu_kms *dpu_kms = _dpu_plane_get_kms(plane);
-
-	if (!pdpu->is_rt_pipe)
-		return;
-
-	pm_runtime_get_sync(&dpu_kms->pdev->dev);
-	_dpu_plane_set_qos_ctrl(plane, enable, DPU_PLANE_QOS_PANIC_CTRL);
-	pm_runtime_put_sync(&dpu_kms->pdev->dev);
-}
-
 /**
  * _dpu_plane_set_ot_limit - set OT limit for the given plane
  * @plane:		Pointer to drm plane
@@ -396,7 +387,7 @@ static void _dpu_plane_set_ot_limit(struct drm_plane *plane,
 	ot_params.width = drm_rect_width(&pdpu->pipe_cfg.src_rect);
 	ot_params.height = drm_rect_height(&pdpu->pipe_cfg.src_rect);
 	ot_params.is_wfd = !pdpu->is_rt_pipe;
-	ot_params.frame_rate = crtc->mode.vrefresh;
+	ot_params.frame_rate = drm_mode_vrefresh(&crtc->mode);
 	ot_params.vbif_idx = VBIF_RT;
 	ot_params.clk_ctrl = pdpu->pipe_hw->cap->clk_ctrl;
 	ot_params.rd = true;
@@ -789,7 +780,6 @@ static int dpu_plane_prepare_fb(struct drm_plane *plane,
 	struct dpu_plane_state *pstate = to_dpu_plane_state(new_state);
 	struct dpu_hw_fmt_layout layout;
 	struct drm_gem_object *obj;
-	struct msm_gem_object *msm_obj;
 	struct dma_fence *fence;
 	struct dpu_kms *kms = _dpu_plane_get_kms(&pdpu->base);
 	int ret;
@@ -808,8 +798,7 @@ static int dpu_plane_prepare_fb(struct drm_plane *plane,
 	 *       implicit fence and fb prepare by hand here.
 	 */
 	obj = msm_framebuffer_bo(new_state->fb, 0);
-	msm_obj = to_msm_bo(obj);
-	fence = reservation_object_get_excl_rcu(msm_obj->resv);
+	fence = reservation_object_get_excl_rcu(obj->resv);
 	if (fence)
 		drm_atomic_set_fence_for_plane(new_state, fence);
 
@@ -1248,6 +1237,19 @@ static void dpu_plane_reset(struct drm_plane *plane)
 }
 
 #ifdef CONFIG_DEBUG_FS
+static void dpu_plane_danger_signal_ctrl(struct drm_plane *plane, bool enable)
+{
+	struct dpu_plane *pdpu = to_dpu_plane(plane);
+	struct dpu_kms *dpu_kms = _dpu_plane_get_kms(plane);
+
+	if (!pdpu->is_rt_pipe)
+		return;
+
+	pm_runtime_get_sync(&dpu_kms->pdev->dev);
+	_dpu_plane_set_qos_ctrl(plane, enable, DPU_PLANE_QOS_PANIC_CTRL);
+	pm_runtime_put_sync(&dpu_kms->pdev->dev);
+}
+
 static ssize_t _dpu_plane_danger_read(struct file *file,
 			char __user *buff, size_t count, loff_t *ppos)
 {
@@ -1410,6 +1412,23 @@ static void dpu_plane_early_unregister(struct drm_plane *plane)
 	debugfs_remove_recursive(pdpu->debugfs_root);
 }
 
+static bool dpu_plane_format_mod_supported(struct drm_plane *plane,
+		uint32_t format, uint64_t modifier)
+{
+	if (modifier == DRM_FORMAT_MOD_LINEAR)
+		return true;
+
+	if (modifier == DRM_FORMAT_MOD_QCOM_COMPRESSED) {
+		int i;
+		for (i = 0; i < ARRAY_SIZE(qcom_compressed_supported_formats); i++) {
+			if (format == qcom_compressed_supported_formats[i])
+				return true;
+		}
+	}
+
+	return false;
+}
+
 static const struct drm_plane_funcs dpu_plane_funcs = {
 		.update_plane = drm_atomic_helper_update_plane,
 		.disable_plane = drm_atomic_helper_disable_plane,
@@ -1419,6 +1438,7 @@ static const struct drm_plane_funcs dpu_plane_funcs = {
 		.atomic_destroy_state = dpu_plane_destroy_state,
 		.late_register = dpu_plane_late_register,
 		.early_unregister = dpu_plane_early_unregister,
+		.format_mod_supported = dpu_plane_format_mod_supported,
 };
 
 static const struct drm_plane_helper_funcs dpu_plane_helper_funcs = {
@@ -1444,11 +1464,12 @@ struct drm_plane *dpu_plane_init(struct drm_device *dev,
 		unsigned long possible_crtcs, u32 master_plane_id)
 {
 	struct drm_plane *plane = NULL, *master_plane = NULL;
-	const struct dpu_format_extended *format_list;
+	const uint32_t *format_list;
 	struct dpu_plane *pdpu;
 	struct msm_drm_private *priv = dev->dev_private;
 	struct dpu_kms *kms = to_dpu_kms(priv->kms);
 	int zpos_max = DPU_ZPOS_MAX;
+	uint32_t num_formats;
 	int ret = -EINVAL;
 
 	/* create and zero local structure */
@@ -1491,24 +1512,18 @@ struct drm_plane *dpu_plane_init(struct drm_device *dev,
 		goto clean_sspp;
 	}
 
-	if (!master_plane_id)
-		format_list = pdpu->pipe_sblk->format_list;
-	else
+	if (pdpu->is_virtual) {
 		format_list = pdpu->pipe_sblk->virt_format_list;
-
-	pdpu->nformats = dpu_populate_formats(format_list,
-				pdpu->formats,
-				0,
-				ARRAY_SIZE(pdpu->formats));
-
-	if (!pdpu->nformats) {
-		DPU_ERROR("[%u]no valid formats for plane\n", pipe);
-		goto clean_sspp;
+		num_formats = pdpu->pipe_sblk->virt_num_formats;
+	}
+	else {
+		format_list = pdpu->pipe_sblk->format_list;
+		num_formats = pdpu->pipe_sblk->num_formats;
 	}
 
 	ret = drm_universal_plane_init(dev, plane, 0xff, &dpu_plane_funcs,
-				pdpu->formats, pdpu->nformats,
-				NULL, type, NULL);
+				format_list, num_formats,
+				supported_format_modifiers, type, NULL);
 	if (ret)
 		goto clean_sspp;
 

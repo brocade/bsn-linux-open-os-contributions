@@ -1879,6 +1879,8 @@ static void ucc_geth_free_tx(struct ucc_geth_private *ugeth)
 	u16 i, j;
 	u8 __iomem *bd;
 
+	netdev_reset_queue(ugeth->ndev);
+
 	ug_info = ugeth->ug_info;
 	uf_info = &ug_info->uf_info;
 
@@ -3908,8 +3910,8 @@ static int ucc_geth_probe(struct platform_device* ofdev)
 	}
 
 	mac_addr = of_get_mac_address(np);
-	if (mac_addr)
-		memcpy(dev->dev_addr, mac_addr, ETH_ALEN);
+	if (!IS_ERR(mac_addr))
+		ether_addr_copy(dev->dev_addr, mac_addr);
 
 	ugeth->ug_info = ug_info;
 	ugeth->dev = device;

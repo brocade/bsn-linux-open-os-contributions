@@ -383,7 +383,7 @@ static long restore_sigcontext(struct task_struct *tsk, sigset_t *set, int sig,
 	err |= __get_user(v_regs, &sc->v_regs);
 	if (err)
 		return err;
-	if (v_regs && !access_ok(VERIFY_READ, v_regs, 34 * sizeof(vector128)))
+	if (v_regs && !access_ok(v_regs, 34 * sizeof(vector128)))
 		return -EFAULT;
 	/* Copy 33 vec registers (vr0..31 and vscr) from the stack */
 	if (v_regs != NULL && (msr & MSR_VEC) != 0) {
@@ -502,10 +502,9 @@ static long restore_tm_sigcontexts(struct task_struct *tsk,
 	err |= __get_user(tm_v_regs, &tm_sc->v_regs);
 	if (err)
 		return err;
-	if (v_regs && !access_ok(VERIFY_READ, v_regs, 34 * sizeof(vector128)))
+	if (v_regs && !access_ok(v_regs, 34 * sizeof(vector128)))
 		return -EFAULT;
-	if (tm_v_regs && !access_ok(VERIFY_READ,
-				    tm_v_regs, 34 * sizeof(vector128)))
+	if (tm_v_regs && !access_ok(tm_v_regs, 34 * sizeof(vector128)))
 		return -EFAULT;
 	/* Copy 33 vec registers (vr0..31 and vscr) from the stack */
 	if (v_regs != NULL && tm_v_regs != NULL && (msr & MSR_VEC) != 0) {
@@ -566,7 +565,7 @@ static long restore_tm_sigcontexts(struct task_struct *tsk,
 	preempt_disable();
 
 	/* pull in MSR TS bits from user context */
-	regs->msr = (regs->msr & ~MSR_TS_MASK) | (msr & MSR_TS_MASK);
+	regs->msr |= msr & MSR_TS_MASK;
 
 	/*
 	 * Ensure that TM is enabled in regs->msr before we leave the signal
@@ -671,7 +670,7 @@ SYSCALL_DEFINE3(swapcontext, struct ucontext __user *, old_ctx,
 		ctx_has_vsx_region = 1;
 
 	if (old_ctx != NULL) {
-		if (!access_ok(VERIFY_WRITE, old_ctx, ctx_size)
+		if (!access_ok(old_ctx, ctx_size)
 		    || setup_sigcontext(&old_ctx->uc_mcontext, current, 0, NULL, 0,
 					ctx_has_vsx_region)
 		    || __copy_to_user(&old_ctx->uc_sigmask,
@@ -680,7 +679,7 @@ SYSCALL_DEFINE3(swapcontext, struct ucontext __user *, old_ctx,
 	}
 	if (new_ctx == NULL)
 		return 0;
-	if (!access_ok(VERIFY_READ, new_ctx, ctx_size)
+	if (!access_ok(new_ctx, ctx_size)
 	    || __get_user(tmp, (u8 __user *) new_ctx)
 	    || __get_user(tmp, (u8 __user *) new_ctx + ctx_size - 1))
 		return -EFAULT;
@@ -725,7 +724,7 @@ SYSCALL_DEFINE0(rt_sigreturn)
 	/* Always make any pending restarted system calls return -EINTR */
 	current->restart_block.fn = do_no_restart_syscall;
 
-	if (!access_ok(VERIFY_READ, uc, sizeof(*uc)))
+	if (!access_ok(uc, sizeof(*uc)))
 		goto badframe;
 
 	if (__copy_from_user(&set, &uc->uc_sigmask, sizeof(set)))
@@ -746,6 +745,31 @@ SYSCALL_DEFINE0(rt_sigreturn)
 	if (MSR_TM_SUSPENDED(mfmsr()))
 		tm_reclaim_current(0);
 
+	/*
+	 * Disable MSR[TS] bit also, so, if there is an exception in the
+	 * code below (as a page fault in copy_ckvsx_to_user()), it does
+	 * not recheckpoint this task if there was a context switch inside
+	 * the exception.
+	 *
+	 * A major page fault can indirectly call schedule(). A reschedule
+	 * process in the middle of an exception can have a side effect
+	 * (Changing the CPU MSR[TS] state), since schedule() is called
+	 * with the CPU MSR[TS] disable and returns with MSR[TS]=Suspended
+	 * (switch_to() calls tm_recheckpoint() for the 'new' process). In
+	 * this case, the process continues to be the same in the CPU, but
+	 * the CPU state just changed.
+	 *
+	 * This can cause a TM Bad Thing, since the MSR in the stack will
+	 * have the MSR[TS]=0, and this is what will be used to RFID.
+	 *
+	 * Clearing MSR[TS] state here will avoid a recheckpoint if there
+	 * is any process reschedule in kernel space. The MSR[TS] state
+	 * does not need to be saved also, since it will be replaced with
+	 * the MSR[TS] that came from user context later, at
+	 * restore_tm_sigcontexts.
+	 */
+	regs->msr &= ~MSR_TS_MASK;
+
 	if (__get_user(msr, &uc->uc_mcontext.gp_regs[PT_MSR]))
 		goto badframe;
 	if (MSR_TM_ACTIVE(msr)) {
@@ -756,11 +780,12 @@ SYSCALL_DEFINE0(rt_sigreturn)
 		if (restore_tm_sigcontexts(current, &uc->uc_mcontext,
 					   &uc_transact->uc_mcontext))
 			goto badframe;
-	}
+	} else
 #endif
-	/* Fall through, for non-TM restore */
-	if (!MSR_TM_ACTIVE(msr)) {
+	{
 		/*
+		 * Fall through, for non-TM restore
+		 *
 		 * Unset MSR[TS] on the thread regs since MSR from user
 		 * context does not have MSR active, and recheckpoint was
 		 * not called since restore_tm_sigcontexts() was not called

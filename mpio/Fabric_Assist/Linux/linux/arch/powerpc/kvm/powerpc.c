@@ -570,6 +570,16 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 	case KVM_CAP_PPC_GET_CPU_CHAR:
 		r = 1;
 		break;
+#ifdef CONFIG_KVM_XIVE
+	case KVM_CAP_PPC_IRQ_XIVE:
+		/*
+		 * We need XIVE to be enabled on the platform (implies
+		 * a POWER9 processor) and the PowerNV platform, as
+		 * nested is not yet supported.
+		 */
+		r = xive_enabled() && !!cpu_has_feature(CPU_FTR_HVMODE);
+		break;
+#endif
 
 	case KVM_CAP_PPC_ALLOC_HTAB:
 		r = hv_enabled;
@@ -643,9 +653,6 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 			r = num_present_cpus();
 		else
 			r = num_online_cpus();
-		break;
-	case KVM_CAP_NR_MEMSLOTS:
-		r = KVM_USER_MEM_SLOTS;
 		break;
 	case KVM_CAP_MAX_VCPUS:
 		r = KVM_MAX_VCPUS;
@@ -748,10 +755,13 @@ void kvm_arch_vcpu_free(struct kvm_vcpu *vcpu)
 		kvmppc_mpic_disconnect_vcpu(vcpu->arch.mpic, vcpu);
 		break;
 	case KVMPPC_IRQ_XICS:
-		if (xive_enabled())
+		if (xics_on_xive())
 			kvmppc_xive_cleanup_vcpu(vcpu);
 		else
 			kvmppc_xics_free_icp(vcpu);
+		break;
+	case KVMPPC_IRQ_XIVE:
+		kvmppc_xive_native_cleanup_vcpu(vcpu);
 		break;
 	}
 
@@ -1931,7 +1941,7 @@ static int kvm_vcpu_ioctl_enable_cap(struct kvm_vcpu *vcpu,
 		r = -EPERM;
 		dev = kvm_device_from_filp(f.file);
 		if (dev) {
-			if (xive_enabled())
+			if (xics_on_xive())
 				r = kvmppc_xive_connect_vcpu(dev, vcpu, cap->args[1]);
 			else
 				r = kvmppc_xics_connect_vcpu(dev, vcpu, cap->args[1]);
@@ -1941,6 +1951,30 @@ static int kvm_vcpu_ioctl_enable_cap(struct kvm_vcpu *vcpu,
 		break;
 	}
 #endif /* CONFIG_KVM_XICS */
+#ifdef CONFIG_KVM_XIVE
+	case KVM_CAP_PPC_IRQ_XIVE: {
+		struct fd f;
+		struct kvm_device *dev;
+
+		r = -EBADF;
+		f = fdget(cap->args[0]);
+		if (!f.file)
+			break;
+
+		r = -ENXIO;
+		if (!xive_enabled())
+			break;
+
+		r = -EPERM;
+		dev = kvm_device_from_filp(f.file);
+		if (dev)
+			r = kvmppc_xive_native_connect_vcpu(dev, vcpu,
+							    cap->args[1]);
+
+		fdput(f);
+		break;
+	}
+#endif /* CONFIG_KVM_XIVE */
 #ifdef CONFIG_KVM_BOOK3S_HV_POSSIBLE
 	case KVM_CAP_PPC_FWNMI:
 		r = -EINVAL;
@@ -2189,10 +2223,12 @@ static int pseries_get_cpu_char(struct kvm_ppc_cpu_char *cp)
 			KVM_PPC_CPU_CHAR_L1D_THREAD_PRIV |
 			KVM_PPC_CPU_CHAR_BR_HINT_HONOURED |
 			KVM_PPC_CPU_CHAR_MTTRIG_THR_RECONF |
-			KVM_PPC_CPU_CHAR_COUNT_CACHE_DIS;
+			KVM_PPC_CPU_CHAR_COUNT_CACHE_DIS |
+			KVM_PPC_CPU_CHAR_BCCTR_FLUSH_ASSIST;
 		cp->behaviour_mask = KVM_PPC_CPU_BEHAV_FAVOUR_SECURITY |
 			KVM_PPC_CPU_BEHAV_L1D_FLUSH_PR |
-			KVM_PPC_CPU_BEHAV_BNDS_CHK_SPEC_BAR;
+			KVM_PPC_CPU_BEHAV_BNDS_CHK_SPEC_BAR |
+			KVM_PPC_CPU_BEHAV_FLUSH_COUNT_CACHE;
 	}
 	return 0;
 }
@@ -2251,12 +2287,16 @@ static int kvmppc_get_cpu_char(struct kvm_ppc_cpu_char *cp)
 		if (have_fw_feat(fw_features, "enabled",
 				 "fw-count-cache-disabled"))
 			cp->character |= KVM_PPC_CPU_CHAR_COUNT_CACHE_DIS;
+		if (have_fw_feat(fw_features, "enabled",
+				 "fw-count-cache-flush-bcctr2,0,0"))
+			cp->character |= KVM_PPC_CPU_CHAR_BCCTR_FLUSH_ASSIST;
 		cp->character_mask = KVM_PPC_CPU_CHAR_SPEC_BAR_ORI31 |
 			KVM_PPC_CPU_CHAR_BCCTRL_SERIALISED |
 			KVM_PPC_CPU_CHAR_L1D_FLUSH_ORI30 |
 			KVM_PPC_CPU_CHAR_L1D_FLUSH_TRIG2 |
 			KVM_PPC_CPU_CHAR_L1D_THREAD_PRIV |
-			KVM_PPC_CPU_CHAR_COUNT_CACHE_DIS;
+			KVM_PPC_CPU_CHAR_COUNT_CACHE_DIS |
+			KVM_PPC_CPU_CHAR_BCCTR_FLUSH_ASSIST;
 
 		if (have_fw_feat(fw_features, "enabled",
 				 "speculation-policy-favor-security"))
@@ -2267,9 +2307,13 @@ static int kvmppc_get_cpu_char(struct kvm_ppc_cpu_char *cp)
 		if (!have_fw_feat(fw_features, "disabled",
 				  "needs-spec-barrier-for-bound-checks"))
 			cp->behaviour |= KVM_PPC_CPU_BEHAV_BNDS_CHK_SPEC_BAR;
+		if (have_fw_feat(fw_features, "enabled",
+				 "needs-count-cache-flush-on-context-switch"))
+			cp->behaviour |= KVM_PPC_CPU_BEHAV_FLUSH_COUNT_CACHE;
 		cp->behaviour_mask = KVM_PPC_CPU_BEHAV_FAVOUR_SECURITY |
 			KVM_PPC_CPU_BEHAV_L1D_FLUSH_PR |
-			KVM_PPC_CPU_BEHAV_BNDS_CHK_SPEC_BAR;
+			KVM_PPC_CPU_BEHAV_BNDS_CHK_SPEC_BAR |
+			KVM_PPC_CPU_BEHAV_FLUSH_COUNT_CACHE;
 
 		of_node_put(fw_features);
 	}

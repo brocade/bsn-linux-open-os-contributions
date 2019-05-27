@@ -82,6 +82,11 @@ struct vfio_pci_dummy_resource {
 	struct list_head	res_next;
 };
 
+struct vfio_pci_reflck {
+	struct kref		kref;
+	struct mutex		lock;
+};
+
 struct vfio_pci_device {
 	struct pci_dev		*pdev;
 	void __iomem		*barmap[PCI_STD_RESOURCE_END + 1];
@@ -109,7 +114,10 @@ struct vfio_pci_device {
 	bool			has_vga;
 	bool			needs_reset;
 	bool			nointx;
+	bool			needs_pm_restore;
 	struct pci_saved_state	*pci_saved_state;
+	struct pci_saved_state	*pm_save;
+	struct vfio_pci_reflck	*reflck;
 	int			refcnt;
 	int			ioeventfds_nr;
 	struct eventfd_ctx	*err_trigger;
@@ -155,6 +163,10 @@ extern int vfio_pci_register_dev_region(struct vfio_pci_device *vdev,
 					unsigned int type, unsigned int subtype,
 					const struct vfio_pci_regops *ops,
 					size_t size, u32 flags, void *data);
+
+extern int vfio_pci_set_power_state(struct vfio_pci_device *vdev,
+				    pci_power_t state);
+
 #ifdef CONFIG_VFIO_PCI_IGD
 extern int vfio_pci_igd_init(struct vfio_pci_device *vdev);
 #else

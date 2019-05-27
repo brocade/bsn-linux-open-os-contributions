@@ -83,6 +83,8 @@ static inline void _tlbivax_bcast(unsigned long address, unsigned int pid,
 }
 #endif
 
+static inline void print_system_hash_info(void) {}
+
 #else /* CONFIG_PPC_MMU_NOHASH */
 
 extern void hash_preload(struct mm_struct *mm, unsigned long ea,
@@ -91,6 +93,8 @@ extern void hash_preload(struct mm_struct *mm, unsigned long ea,
 
 extern void _tlbie(unsigned long address);
 extern void _tlbia(void);
+
+void print_system_hash_info(void);
 
 #endif /* CONFIG_PPC_MMU_NOHASH */
 
@@ -104,8 +108,8 @@ extern int __map_without_bats;
 extern unsigned int rtas_data, rtas_size;
 
 struct hash_pte;
-extern struct hash_pte *Hash, *Hash_end;
-extern unsigned long Hash_size, Hash_mask;
+extern struct hash_pte *Hash;
+extern u8 early_hash[];
 
 #endif /* CONFIG_PPC32 */
 
@@ -130,7 +134,8 @@ extern void wii_memory_fixups(void);
  */
 #ifdef CONFIG_PPC32
 extern void MMU_init_hw(void);
-extern unsigned long mmu_mapin_ram(unsigned long top);
+void MMU_init_hw_patch(void);
+unsigned long mmu_mapin_ram(unsigned long base, unsigned long top);
 #endif
 
 #ifdef CONFIG_PPC_FSL_BOOK3E
@@ -164,4 +169,12 @@ unsigned long p_block_mapped(phys_addr_t pa);
 #else
 static inline phys_addr_t v_block_mapped(unsigned long va) { return 0; }
 static inline unsigned long p_block_mapped(phys_addr_t pa) { return 0; }
+#endif
+
+#if defined(CONFIG_PPC_BOOK3S_32) || defined(CONFIG_PPC_8xx)
+void mmu_mark_initmem_nx(void);
+void mmu_mark_rodata_ro(void);
+#else
+static inline void mmu_mark_initmem_nx(void) { }
+static inline void mmu_mark_rodata_ro(void) { }
 #endif

@@ -443,24 +443,15 @@ static void recover_worker(struct work_struct *work)
 	if (submit) {
 		struct task_struct *task;
 
+		/* Increment the fault counts */
+		gpu->global_faults++;
+		submit->queue->faults++;
+
 		task = get_pid_task(submit->pid, PIDTYPE_PID);
 		if (task) {
 			comm = kstrdup(task->comm, GFP_KERNEL);
-
-			/*
-			 * So slightly annoying, in other paths like
-			 * mmap'ing gem buffers, mmap_sem is acquired
-			 * before struct_mutex, which means we can't
-			 * hold struct_mutex across the call to
-			 * get_cmdline().  But submits are retired
-			 * from the same in-order workqueue, so we can
-			 * safely drop the lock here without worrying
-			 * about the submit going away.
-			 */
-			mutex_unlock(&dev->struct_mutex);
 			cmd = kstrdup_quotable_cmdline(task, GFP_KERNEL);
 			put_task_struct(task);
-			mutex_lock(&dev->struct_mutex);
 		}
 
 		if (comm && cmd) {
@@ -900,7 +891,7 @@ int msm_gpu_init(struct drm_device *drm, struct platform_device *pdev,
 	}
 
 	/* Get Interrupt: */
-	gpu->irq = platform_get_irq_byname(pdev, config->irqname);
+	gpu->irq = platform_get_irq(pdev, 0);
 	if (gpu->irq < 0) {
 		ret = gpu->irq;
 		DRM_DEV_ERROR(drm->dev, "failed to get irq: %d\n", ret);

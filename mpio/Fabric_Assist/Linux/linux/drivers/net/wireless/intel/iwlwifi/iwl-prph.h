@@ -8,7 +8,7 @@
  * Copyright(c) 2005 - 2014 Intel Corporation. All rights reserved.
  * Copyright(c) 2013 - 2014 Intel Mobile Communications GmbH
  * Copyright(c) 2016        Intel Deutschland GmbH
- * Copyright (C) 2018 Intel Corporation
+ * Copyright (C) 2018 - 2019 Intel Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -31,7 +31,7 @@
  * Copyright(c) 2005 - 2014 Intel Corporation. All rights reserved.
  * Copyright(c) 2013 - 2014 Intel Mobile Communications GmbH
  * Copyright(c) 2016        Intel Deutschland GmbH
- * Copyright (C) 2018 Intel Corporation
+ * Copyright (C) 2018 - 2019 Intel Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -358,16 +358,22 @@
 
 /* FW monitor */
 #define MON_BUFF_SAMPLE_CTL		(0xa03c00)
-#define MON_BUFF_BASE_ADDR		(0xa03c3c)
+#define MON_BUFF_BASE_ADDR		(0xa03c1c)
 #define MON_BUFF_END_ADDR		(0xa03c40)
 #define MON_BUFF_WRPTR			(0xa03c44)
 #define MON_BUFF_CYCLE_CNT		(0xa03c48)
 /* FW monitor family 8000 and on */
-#define MON_BUFF_BASE_ADDR_VER2		(0xa03c3c)
+#define MON_BUFF_BASE_ADDR_VER2		(0xa03c1c)
 #define MON_BUFF_END_ADDR_VER2		(0xa03c20)
 #define MON_BUFF_WRPTR_VER2		(0xa03c24)
 #define MON_BUFF_CYCLE_CNT_VER2		(0xa03c28)
 #define MON_BUFF_SHIFT_VER2		(0x8)
+/* FW monitor familiy AX210 and on */
+#define DBGC_CUR_DBGBUF_BASE_ADDR_LSB		(0xd03c20)
+#define DBGC_CUR_DBGBUF_BASE_ADDR_MSB		(0xd03c24)
+#define DBGC_CUR_DBGBUF_STATUS			(0xd03c1c)
+#define DBGC_DBGBUF_WRAP_AROUND			(0xd03c2c)
+#define DBGC_CUR_DBGBUF_STATUS_OFFSET_MSK	(0x00ffffff)
 
 #define MON_DMARB_RD_CTL_ADDR		(0xa03c60)
 #define MON_DMARB_RD_DATA_ADDR		(0xa03c5c)
@@ -433,4 +439,7 @@ enum {
 #define HPM_DEBUG			0xA03440
 #define PERSISTENCE_BIT			BIT(12)
 #define PREG_WFPM_ACCESS		BIT(12)
+
+#define UREG_DOORBELL_TO_ISR6		0xA05C04
+#define UREG_DOORBELL_TO_ISR6_NMI_BIT	BIT(0)
 #endif				/* __iwl_prph_h__ */

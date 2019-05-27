@@ -21,8 +21,6 @@
 
 static struct of_pdt_ops *of_pdt_prom_ops __initdata;
 
-void __initdata (*of_pdt_build_more)(struct device_node *dp);
-
 #if defined(CONFIG_SPARC)
 unsigned int of_pdt_unique_id __initdata;
 
@@ -157,7 +155,6 @@ static struct device_node * __init of_pdt_create_node(phandle node,
 	dp->parent = parent;
 
 	dp->name = of_pdt_get_one_property(node, "name");
-	dp->type = of_pdt_get_one_property(node, "device_type");
 	dp->phandle = node;
 
 	dp->properties = of_pdt_build_prop_list(node);
@@ -188,9 +185,6 @@ static struct device_node * __init of_pdt_build_tree(struct device_node *parent,
 		prev_sibling = dp;
 
 		dp->child = of_pdt_build_tree(dp, of_pdt_prom_ops->getchild(node));
-
-		if (of_pdt_build_more)
-			of_pdt_build_more(dp);
 
 		node = of_pdt_prom_ops->getsibling(node);
 	}

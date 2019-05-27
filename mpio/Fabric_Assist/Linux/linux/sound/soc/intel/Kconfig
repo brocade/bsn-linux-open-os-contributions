@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 config SND_SOC_INTEL_SST_TOPLEVEL
 	bool "Intel ASoC SST drivers"
 	default y
@@ -91,7 +92,7 @@ config SND_SST_ATOM_HIFI2_PLATFORM_PCI
 config SND_SST_ATOM_HIFI2_PLATFORM_ACPI
 	tristate "ACPI HiFi2 (Baytrail, Cherrytrail) Platforms"
 	default ACPI
-	depends on X86 && ACPI
+	depends on X86 && ACPI && PCI
 	select SND_SST_IPC_ACPI
 	select SND_SST_ATOM_HIFI2_PLATFORM
 	select SND_SOC_ACPI_INTEL_MATCH
@@ -188,12 +189,6 @@ config SND_SOC_INTEL_SKYLAKE_COMMON
 	select SND_SOC_TOPOLOGY
 	select SND_SOC_INTEL_SST
 	select SND_SOC_HDAC_HDA if SND_SOC_INTEL_SKYLAKE_HDAUDIO_CODEC
-	select SND_HDA_INTEL_DSP_DETECTION_SKL if SND_SOC_INTEL_SKL
-	select SND_HDA_INTEL_DSP_DETECTION_APL if SND_SOC_INTEL_APL
-	select SND_HDA_INTEL_DSP_DETECTION_KBL if SND_SOC_INTEL_KBL
-	select SND_HDA_INTEL_DSP_DETECTION_GLK if SND_SOC_INTEL_GLK
-	select SND_HDA_INTEL_DSP_DETECTION_CNL if SND_SOC_INTEL_CNL
-	select SND_HDA_INTEL_DSP_DETECTION_CFL if SND_SOC_INTEL_CFL
 	select SND_SOC_ACPI_INTEL_MATCH
 	help
 	  If you have a Intel Skylake/Broxton/ApolloLake/KabyLake/
@@ -202,13 +197,18 @@ config SND_SOC_INTEL_SKYLAKE_COMMON
 
 endif ## SND_SOC_INTEL_SKYLAKE_FAMILY
 
+endif ## SND_SOC_INTEL_SST_TOPLEVEL
+
+if SND_SOC_INTEL_SST_TOPLEVEL || SND_SOC_SOF_INTEL_TOPLEVEL
+
 config SND_SOC_ACPI_INTEL_MATCH
 	tristate
 	select SND_SOC_ACPI if ACPI
 	# this option controls the compilation of ACPI matching tables and
 	# helpers and is not meant to be selected by the user.
 
-endif ## SND_SOC_INTEL_SST_TOPLEVEL
+endif ## SND_SOC_INTEL_SST_TOPLEVEL || SND_SOC_SOF_INTEL_TOPLEVEL
+
 
 # ASoC codec drivers
 source "sound/soc/intel/boards/Kconfig"

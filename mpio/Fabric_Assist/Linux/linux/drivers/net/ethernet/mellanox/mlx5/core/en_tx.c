@@ -32,6 +32,7 @@
 
 #include <linux/tcp.h>
 #include <linux/if_vlan.h>
+#include <net/geneve.h>
 #include <net/dsfield.h>
 #include "en.h"
 #include "ipoib/ipoib.h"
@@ -110,11 +111,10 @@ static inline int mlx5e_get_dscp_up(struct mlx5e_priv *priv, struct sk_buff *skb
 #endif
 
 u16 mlx5e_select_queue(struct net_device *dev, struct sk_buff *skb,
-		       struct net_device *sb_dev,
-		       select_queue_fallback_t fallback)
+		       struct net_device *sb_dev)
 {
+	int channel_ix = netdev_pick_tx(dev, skb, NULL);
 	struct mlx5e_priv *priv = netdev_priv(dev);
-	int channel_ix = fallback(dev, skb, NULL);
 	u16 num_channels;
 	int up = 0;
 
@@ -148,12 +148,8 @@ static inline int mlx5e_skb_l2_header_offset(struct sk_buff *skb)
 
 static inline int mlx5e_skb_l3_header_offset(struct sk_buff *skb)
 {
-	struct flow_keys keys;
-
 	if (skb_transport_header_was_set(skb))
 		return skb_transport_offset(skb);
-	else if (skb_flow_dissect_flow_keys(skb, &keys, 0))
-		return keys.control.thoff;
 	else
 		return mlx5e_skb_l2_header_offset(skb);
 }
@@ -167,20 +163,13 @@ static inline u16 mlx5e_calc_min_inline(enum mlx5_inline_modes mode,
 	case MLX5_INLINE_MODE_NONE:
 		return 0;
 	case MLX5_INLINE_MODE_TCP_UDP:
-		hlen = eth_get_headlen(skb->data, skb_headlen(skb));
+		hlen = eth_get_headlen(skb->dev, skb->data, skb_headlen(skb));
 		if (hlen == ETH_HLEN && !skb_vlan_tag_present(skb))
 			hlen += VLAN_HLEN;
 		break;
 	case MLX5_INLINE_MODE_IP:
-		/* When transport header is set to zero, it means no transport
-		 * header. When transport header is set to 0xff's, it means
-		 * transport header wasn't set.
-		 */
-		if (skb_transport_offset(skb)) {
-			hlen = mlx5e_skb_l3_header_offset(skb);
-			break;
-		}
-		/* fall through */
+		hlen = mlx5e_skb_l3_header_offset(skb);
+		break;
 	case MLX5_INLINE_MODE_L2:
 	default:
 		hlen = mlx5e_skb_l2_header_offset(skb);
@@ -308,7 +297,8 @@ static inline void mlx5e_fill_sq_frag_edge(struct mlx5e_txqsq *sq,
 static inline void
 mlx5e_txwqe_complete(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 		     u8 opcode, u16 ds_cnt, u8 num_wqebbs, u32 num_bytes, u8 num_dma,
-		     struct mlx5e_tx_wqe_info *wi, struct mlx5_wqe_ctrl_seg *cseg)
+		     struct mlx5e_tx_wqe_info *wi, struct mlx5_wqe_ctrl_seg *cseg,
+		     bool xmit_more)
 {
 	struct mlx5_wq_cyc *wq = &sq->wq;
 
@@ -331,14 +321,14 @@ mlx5e_txwqe_complete(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 		sq->stats->stopped++;
 	}
 
-	if (!skb->xmit_more || netif_xmit_stopped(sq->txq))
+	if (!xmit_more || netif_xmit_stopped(sq->txq))
 		mlx5e_notify_hw(wq, sq->pc, sq->uar_map, cseg);
 }
 
 #define INL_HDR_START_SZ (sizeof(((struct mlx5_wqe_eth_seg *)NULL)->inline_hdr.start))
 
 netdev_tx_t mlx5e_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
-			  struct mlx5e_tx_wqe *wqe, u16 pi)
+			  struct mlx5e_tx_wqe *wqe, u16 pi, bool xmit_more)
 {
 	struct mlx5_wq_cyc *wq = &sq->wq;
 	struct mlx5_wqe_ctrl_seg *cseg;
@@ -371,7 +361,7 @@ netdev_tx_t mlx5e_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 	}
 
 	stats->bytes     += num_bytes;
-	stats->xmit_more += skb->xmit_more;
+	stats->xmit_more += xmit_more;
 
 	headlen = skb->len - ihs - skb->data_len;
 	ds_cnt += !!headlen;
@@ -387,8 +377,14 @@ netdev_tx_t mlx5e_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 	num_wqebbs = DIV_ROUND_UP(ds_cnt, MLX5_SEND_WQEBB_NUM_DS);
 	contig_wqebbs_room = mlx5_wq_cyc_get_contig_wqebbs(wq, pi);
 	if (unlikely(contig_wqebbs_room < num_wqebbs)) {
+#ifdef CONFIG_MLX5_EN_IPSEC
+		struct mlx5_wqe_eth_seg cur_eth = wqe->eth;
+#endif
 		mlx5e_fill_sq_frag_edge(sq, wq, pi, contig_wqebbs_room);
 		mlx5e_sq_fetch_wqe(sq, &wqe, &pi);
+#ifdef CONFIG_MLX5_EN_IPSEC
+		wqe->eth = cur_eth;
+#endif
 	}
 
 	/* fill wqe */
@@ -397,6 +393,10 @@ netdev_tx_t mlx5e_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 	eseg = &wqe->eth;
 	dseg =  wqe->data;
 
+#if IS_ENABLED(CONFIG_GENEVE)
+	if (skb->encapsulation)
+		mlx5e_tx_tunnel_accel(skb, eseg);
+#endif
 	mlx5e_txwqe_build_eseg_csum(sq, skb, eseg);
 
 	eseg->mss = mss;
@@ -424,7 +424,7 @@ netdev_tx_t mlx5e_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 		goto err_drop;
 
 	mlx5e_txwqe_complete(sq, skb, opcode, ds_cnt, num_wqebbs, num_bytes,
-			     num_dma, wi, cseg);
+			     num_dma, wi, cseg, xmit_more);
 
 	return NETDEV_TX_OK;
 
@@ -450,7 +450,7 @@ netdev_tx_t mlx5e_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (unlikely(!skb))
 		return NETDEV_TX_OK;
 
-	return mlx5e_sq_xmit(sq, skb, wqe, pi);
+	return mlx5e_sq_xmit(sq, skb, wqe, pi, netdev_xmit_more());
 }
 
 static void mlx5e_dump_error_cqe(struct mlx5e_txqsq *sq,
@@ -514,7 +514,7 @@ bool mlx5e_poll_tx_cq(struct mlx5e_cq *cq, int napi_budget)
 				mlx5e_dump_error_cqe(sq,
 						     (struct mlx5_err_cqe *)cqe);
 				queue_work(cq->channel->priv->wq,
-					   &sq->recover.recover_work);
+					   &sq->recover_work);
 			}
 			stats->cqe_err++;
 		}
@@ -624,7 +624,8 @@ mlx5i_txwqe_build_datagram(struct mlx5_av *av, u32 dqpn, u32 dqkey,
 }
 
 netdev_tx_t mlx5i_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
-			  struct mlx5_av *av, u32 dqpn, u32 dqkey)
+			  struct mlx5_av *av, u32 dqpn, u32 dqkey,
+			  bool xmit_more)
 {
 	struct mlx5_wq_cyc *wq = &sq->wq;
 	struct mlx5i_tx_wqe *wqe;
@@ -660,7 +661,7 @@ netdev_tx_t mlx5i_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 	}
 
 	stats->bytes     += num_bytes;
-	stats->xmit_more += skb->xmit_more;
+	stats->xmit_more += xmit_more;
 
 	headlen = skb->len - ihs - skb->data_len;
 	ds_cnt += !!headlen;
@@ -705,7 +706,7 @@ netdev_tx_t mlx5i_sq_xmit(struct mlx5e_txqsq *sq, struct sk_buff *skb,
 		goto err_drop;
 
 	mlx5e_txwqe_complete(sq, skb, opcode, ds_cnt, num_wqebbs, num_bytes,
-			     num_dma, wi, cseg);
+			     num_dma, wi, cseg, xmit_more);
 
 	return NETDEV_TX_OK;
 

@@ -2295,7 +2295,7 @@ static void igb_get_ethtool_stats(struct net_device *netdev,
 	int i, j;
 	char *p;
 
-	mutex_lock(&adapter->stats64_lock);
+	spin_lock(&adapter->stats64_lock);
 	igb_update_stats(adapter);
 
 	for (i = 0; i < IGB_GLOBAL_STATS_LEN; i++) {
@@ -2338,7 +2338,7 @@ static void igb_get_ethtool_stats(struct net_device *netdev,
 		} while (u64_stats_fetch_retry_irq(&ring->rx_syncp, start));
 		i += IGB_RX_QUEUE_STATS_LEN;
 	}
-	mutex_unlock(&adapter->stats64_lock);
+	spin_unlock(&adapter->stats64_lock);
 }
 
 static void igb_get_strings(struct net_device *netdev, u32 stringset, u8 *data)
@@ -3158,8 +3158,8 @@ static int igb_set_eee(struct net_device *netdev,
 	} else if (!edata->eee_enabled) {
 		dev_err(&adapter->pdev->dev,
 			"Setting EEE options are not supported with EEE disabled\n");
-			return -EINVAL;
-		}
+		return -EINVAL;
+	}
 
 	adapter->eee_advert = ethtool_adv_to_mmd_eee_adv_t(edata->advertised);
 	if (hw->dev_spec._82575.eee_disable != !edata->eee_enabled) {

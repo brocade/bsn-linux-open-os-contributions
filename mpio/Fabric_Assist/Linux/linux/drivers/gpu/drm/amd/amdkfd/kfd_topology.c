@@ -37,6 +37,7 @@
 #include "kfd_device_queue_manager.h"
 #include "kfd_iommu.h"
 #include "amdgpu_amdkfd.h"
+#include "amdgpu_ras.h"
 
 /* topology_device_list - Master list of all topology devices */
 static struct list_head topology_device_list;
@@ -1093,8 +1094,6 @@ static uint32_t kfd_generate_gpu_id(struct kfd_dev *gpu)
  *		the GPU device is not already present in the topology device
  *		list then return NULL. This means a new topology device has to
  *		be created for this GPU.
- * TODO: Rather than assiging @gpu to first topology device withtout
- *		gpu attached, it will better to have more stringent check.
  */
 static struct kfd_topology_device *kfd_assign_gpu(struct kfd_dev *gpu)
 {
@@ -1102,12 +1101,20 @@ static struct kfd_topology_device *kfd_assign_gpu(struct kfd_dev *gpu)
 	struct kfd_topology_device *out_dev = NULL;
 
 	down_write(&topology_lock);
-	list_for_each_entry(dev, &topology_device_list, list)
+	list_for_each_entry(dev, &topology_device_list, list) {
+		/* Discrete GPUs need their own topology device list
+		 * entries. Don't assign them to CPU/APU nodes.
+		 */
+		if (!gpu->device_info->needs_iommu_device &&
+		    dev->node_props.cpu_cores_count)
+			continue;
+
 		if (!dev->gpu && (dev->node_props.simd_count > 0)) {
 			dev->gpu = gpu;
 			out_dev = dev;
 			break;
 		}
+	}
 	up_write(&topology_lock);
 	return out_dev;
 }
@@ -1191,6 +1198,7 @@ int kfd_topology_add_device(struct kfd_dev *gpu)
 	void *crat_image = NULL;
 	size_t image_size = 0;
 	int proximity_domain;
+	struct amdgpu_ras *ctx;
 
 	INIT_LIST_HEAD(&temp_topology_device_list);
 
@@ -1264,8 +1272,7 @@ int kfd_topology_add_device(struct kfd_dev *gpu)
 
 	dev->node_props.vendor_id = gpu->pdev->vendor;
 	dev->node_props.device_id = gpu->pdev->device;
-	dev->node_props.location_id = PCI_DEVID(gpu->pdev->bus->number,
-		gpu->pdev->devfn);
+	dev->node_props.location_id = pci_dev_id(gpu->pdev);
 	dev->node_props.max_engine_clk_fcompute =
 		amdgpu_amdkfd_get_max_engine_clock_in_mhz(dev->gpu->kgd);
 	dev->node_props.max_engine_clk_ccompute =
@@ -1320,6 +1327,20 @@ int kfd_topology_add_device(struct kfd_dev *gpu)
 			cu_info.simd_per_cu * cu_info.cu_active_number;
 		dev->node_props.max_waves_per_simd = 10;
 		dev->node_props.capability |= HSA_CAP_ATS_PRESENT;
+	}
+
+	ctx = amdgpu_ras_get_context((struct amdgpu_device *)(dev->gpu->kgd));
+	if (ctx) {
+		/* kfd only concerns sram ecc on GFX/SDMA and HBM ecc on UMC */
+		dev->node_props.capability |=
+			(((ctx->features & BIT(AMDGPU_RAS_BLOCK__SDMA)) != 0) ||
+			 ((ctx->features & BIT(AMDGPU_RAS_BLOCK__GFX)) != 0)) ?
+			HSA_CAP_SRAM_EDCSUPPORTED : 0;
+		dev->node_props.capability |= ((ctx->features & BIT(AMDGPU_RAS_BLOCK__UMC)) != 0) ?
+			HSA_CAP_MEM_EDCSUPPORTED : 0;
+
+		dev->node_props.capability |= (ctx->features != 0) ?
+			HSA_CAP_RASEVENTNOTIFY : 0;
 	}
 
 	kfd_debug_print_topology();
@@ -1392,7 +1413,6 @@ int kfd_topology_enum_kfd_devices(uint8_t idx, struct kfd_dev **kdev)
 
 static int kfd_cpumask_to_apic_id(const struct cpumask *cpumask)
 {
-	const struct cpuinfo_x86 *cpuinfo;
 	int first_cpu_of_numa_node;
 
 	if (!cpumask || cpumask == cpu_none_mask)
@@ -1400,9 +1420,11 @@ static int kfd_cpumask_to_apic_id(const struct cpumask *cpumask)
 	first_cpu_of_numa_node = cpumask_first(cpumask);
 	if (first_cpu_of_numa_node >= nr_cpu_ids)
 		return -1;
-	cpuinfo = &cpu_data(first_cpu_of_numa_node);
-
-	return cpuinfo->apicid;
+#ifdef CONFIG_X86_64
+	return cpu_data(first_cpu_of_numa_node).apicid;
+#else
+	return first_cpu_of_numa_node;
+#endif
 }
 
 /* kfd_numa_node_to_apic_id - Returns the APIC ID of the first logical processor

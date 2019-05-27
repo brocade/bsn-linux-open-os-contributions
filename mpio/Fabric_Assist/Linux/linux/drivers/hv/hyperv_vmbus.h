@@ -162,8 +162,6 @@ struct hv_context {
 
 	void *tsc_page;
 
-	bool synic_initialized;
-
 	struct hv_per_cpu_context __percpu *cpu_context;
 
 	/*
@@ -195,6 +193,7 @@ extern void hv_synic_clockevents_cleanup(void);
 
 /* Interface */
 
+void hv_ringbuffer_pre_init(struct vmbus_channel *channel);
 
 int hv_ringbuffer_init(struct hv_ring_buffer_info *ring_info,
 		       struct page *pages, u32 pagecnt);
@@ -314,14 +313,16 @@ extern const struct vmbus_channel_message_table_entry
 
 /* General vmbus interface */
 
-struct hv_device *vmbus_device_create(const uuid_le *type,
-				      const uuid_le *instance,
+struct hv_device *vmbus_device_create(const guid_t *type,
+				      const guid_t *instance,
 				      struct vmbus_channel *channel);
 
 int vmbus_device_register(struct hv_device *child_device_obj);
 void vmbus_device_unregister(struct hv_device *device_obj);
 int vmbus_add_channel_kobj(struct hv_device *device_obj,
 			   struct vmbus_channel *channel);
+
+void vmbus_remove_channel_attr_group(struct vmbus_channel *channel);
 
 struct vmbus_channel *relid2channel(u32 relid);
 

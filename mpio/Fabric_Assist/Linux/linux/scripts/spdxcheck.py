@@ -32,7 +32,7 @@ class SPDXdata(object):
 def read_spdxdata(repo):
 
     # The subdirectories of LICENSES in the kernel source
-    license_dirs = [ "preferred", "other", "exceptions" ]
+    license_dirs = [ "preferred", "deprecated", "exceptions", "dual" ]
     lictree = repo.head.commit.tree['LICENSES']
 
     spdx = SPDXdata()
@@ -175,7 +175,13 @@ class id_parser(object):
                 self.lines_checked += 1
                 if line.find("SPDX-License-Identifier:") < 0:
                     continue
-                expr = line.split(':')[1].replace('*/', '').strip()
+                expr = line.split(':')[1].strip()
+                # Remove trailing comment closure
+                if line.strip().endswith('*/'):
+                    expr = expr.rstrip('*/').strip()
+                # Special case for SH magic boot code files
+                if line.startswith('LIST \"'):
+                    expr = expr.rstrip('\"').strip()
                 self.parse(expr)
                 self.spdx_valid += 1
                 #

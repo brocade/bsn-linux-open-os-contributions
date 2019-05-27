@@ -116,15 +116,6 @@ static inline void dma_desc_set_addr(struct bcm_sysport_priv *priv,
 	writel_relaxed(lower_32_bits(addr), d + DESC_ADDR_LO);
 }
 
-static inline void tdma_port_write_desc_addr(struct bcm_sysport_priv *priv,
-					     struct dma_desc *desc,
-					     unsigned int port)
-{
-	/* Ports are latched, so write upper address first */
-	tdma_writel(priv, desc->addr_status_len, TDMA_WRITE_PORT_HI(port));
-	tdma_writel(priv, desc->addr_lo, TDMA_WRITE_PORT_LO(port));
-}
-
 /* Ethtool operations */
 static void bcm_sysport_set_rx_csum(struct net_device *dev,
 				    netdev_features_t wanted)
@@ -134,6 +125,10 @@ static void bcm_sysport_set_rx_csum(struct net_device *dev,
 
 	priv->rx_chk_en = !!(wanted & NETIF_F_RXCSUM);
 	reg = rxchk_readl(priv, RXCHK_CONTROL);
+	/* Clear L2 header checks, which would prevent BPDUs
+	 * from being received.
+	 */
+	reg &= ~RXCHK_L2_HDR_DIS;
 	if (priv->rx_chk_en)
 		reg |= RXCHK_EN;
 	else
@@ -520,7 +515,6 @@ static void bcm_sysport_get_wol(struct net_device *dev,
 				struct ethtool_wolinfo *wol)
 {
 	struct bcm_sysport_priv *priv = netdev_priv(dev);
-	u32 reg;
 
 	wol->supported = WAKE_MAGIC | WAKE_MAGICSECURE | WAKE_FILTER;
 	wol->wolopts = priv->wolopts;
@@ -528,11 +522,7 @@ static void bcm_sysport_get_wol(struct net_device *dev,
 	if (!(priv->wolopts & WAKE_MAGICSECURE))
 		return;
 
-	/* Return the programmed SecureOn password */
-	reg = umac_readl(priv, UMAC_PSW_MS);
-	put_unaligned_be16(reg, &wol->sopass[0]);
-	reg = umac_readl(priv, UMAC_PSW_LS);
-	put_unaligned_be32(reg, &wol->sopass[2]);
+	memcpy(wol->sopass, priv->sopass, sizeof(priv->sopass));
 }
 
 static int bcm_sysport_set_wol(struct net_device *dev,
@@ -548,13 +538,8 @@ static int bcm_sysport_set_wol(struct net_device *dev,
 	if (wol->wolopts & ~supported)
 		return -EINVAL;
 
-	/* Program the SecureOn password */
-	if (wol->wolopts & WAKE_MAGICSECURE) {
-		umac_writel(priv, get_unaligned_be16(&wol->sopass[0]),
-			    UMAC_PSW_MS);
-		umac_writel(priv, get_unaligned_be32(&wol->sopass[2]),
-			    UMAC_PSW_LS);
-	}
+	if (wol->wolopts & WAKE_MAGICSECURE)
+		memcpy(priv->sopass, wol->sopass, sizeof(priv->sopass));
 
 	/* Flag the device and relevant IRQ as wakeup capable */
 	if (wol->wolopts) {
@@ -1297,11 +1282,10 @@ static netdev_tx_t bcm_sysport_xmit(struct sk_buff *skb,
 	struct bcm_sysport_tx_ring *ring;
 	struct bcm_sysport_cb *cb;
 	struct netdev_queue *txq;
-	struct dma_desc *desc;
+	u32 len_status, addr_lo;
 	unsigned int skb_len;
 	unsigned long flags;
 	dma_addr_t mapping;
-	u32 len_status;
 	u16 queue;
 	int ret;
 
@@ -1344,10 +1328,7 @@ static netdev_tx_t bcm_sysport_xmit(struct sk_buff *skb,
 	dma_unmap_addr_set(cb, dma_addr, mapping);
 	dma_unmap_len_set(cb, dma_len, skb_len);
 
-	/* Fetch a descriptor entry from our pool */
-	desc = ring->desc_cpu;
-
-	desc->addr_lo = lower_32_bits(mapping);
+	addr_lo = lower_32_bits(mapping);
 	len_status = upper_32_bits(mapping) & DESC_ADDR_HI_MASK;
 	len_status |= (skb_len << DESC_LEN_SHIFT);
 	len_status |= (DESC_SOP | DESC_EOP | TX_STATUS_APP_CRC) <<
@@ -1360,16 +1341,9 @@ static netdev_tx_t bcm_sysport_xmit(struct sk_buff *skb,
 		ring->curr_desc = 0;
 	ring->desc_count--;
 
-	/* Ensure write completion of the descriptor status/length
-	 * in DRAM before the System Port WRITE_PORT register latches
-	 * the value
-	 */
-	wmb();
-	desc->addr_status_len = len_status;
-	wmb();
-
-	/* Write this descriptor address to the RING write port */
-	tdma_port_write_desc_addr(priv, desc, ring->index);
+	/* Ports are latched, so write upper address first */
+	tdma_writel(priv, len_status, TDMA_WRITE_PORT_HI(ring->index));
+	tdma_writel(priv, addr_lo, TDMA_WRITE_PORT_LO(ring->index));
 
 	/* Check ring space and update SW control flow */
 	if (ring->desc_count == 0)
@@ -1495,28 +1469,14 @@ static int bcm_sysport_init_tx_ring(struct bcm_sysport_priv *priv,
 				    unsigned int index)
 {
 	struct bcm_sysport_tx_ring *ring = &priv->tx_rings[index];
-	struct device *kdev = &priv->pdev->dev;
 	size_t size;
-	void *p;
 	u32 reg;
 
 	/* Simple descriptors partitioning for now */
 	size = 256;
 
-	/* We just need one DMA descriptor which is DMA-able, since writing to
-	 * the port will allocate a new descriptor in its internal linked-list
-	 */
-	p = dma_zalloc_coherent(kdev, sizeof(struct dma_desc), &ring->desc_dma,
-				GFP_KERNEL);
-	if (!p) {
-		netif_err(priv, hw, priv->netdev, "DMA alloc failed\n");
-		return -ENOMEM;
-	}
-
 	ring->cbs = kcalloc(size, sizeof(struct bcm_sysport_cb), GFP_KERNEL);
 	if (!ring->cbs) {
-		dma_free_coherent(kdev, sizeof(struct dma_desc),
-				  ring->desc_cpu, ring->desc_dma);
 		netif_err(priv, hw, priv->netdev, "CB allocation failed\n");
 		return -ENOMEM;
 	}
@@ -1529,7 +1489,6 @@ static int bcm_sysport_init_tx_ring(struct bcm_sysport_priv *priv,
 	ring->size = size;
 	ring->clean_index = 0;
 	ring->alloc_size = ring->size;
-	ring->desc_cpu = p;
 	ring->desc_count = ring->size;
 	ring->curr_desc = 0;
 
@@ -1584,8 +1543,8 @@ static int bcm_sysport_init_tx_ring(struct bcm_sysport_priv *priv,
 	napi_enable(&ring->napi);
 
 	netif_dbg(priv, hw, priv->netdev,
-		  "TDMA cfg, size=%d, desc_cpu=%p switch q=%d,port=%d\n",
-		  ring->size, ring->desc_cpu, ring->switch_queue,
+		  "TDMA cfg, size=%d, switch q=%d,port=%d\n",
+		  ring->size, ring->switch_queue,
 		  ring->switch_port);
 
 	return 0;
@@ -1595,7 +1554,6 @@ static void bcm_sysport_fini_tx_ring(struct bcm_sysport_priv *priv,
 				     unsigned int index)
 {
 	struct bcm_sysport_tx_ring *ring = &priv->tx_rings[index];
-	struct device *kdev = &priv->pdev->dev;
 	u32 reg;
 
 	/* Caller should stop the TDMA engine */
@@ -1617,12 +1575,6 @@ static void bcm_sysport_fini_tx_ring(struct bcm_sysport_priv *priv,
 
 	kfree(ring->cbs);
 	ring->cbs = NULL;
-
-	if (ring->desc_dma) {
-		dma_free_coherent(kdev, sizeof(struct dma_desc),
-				  ring->desc_cpu, ring->desc_dma);
-		ring->desc_dma = 0;
-	}
 	ring->size = 0;
 	ring->alloc_size = 0;
 
@@ -2280,8 +2232,7 @@ static const struct ethtool_ops bcm_sysport_ethtool_ops = {
 };
 
 static u16 bcm_sysport_select_queue(struct net_device *dev, struct sk_buff *skb,
-				    struct net_device *sb_dev,
-				    select_queue_fallback_t fallback)
+				    struct net_device *sb_dev)
 {
 	struct bcm_sysport_priv *priv = netdev_priv(dev);
 	u16 queue = skb_get_queue_mapping(skb);
@@ -2289,7 +2240,7 @@ static u16 bcm_sysport_select_queue(struct net_device *dev, struct sk_buff *skb,
 	unsigned int q, port;
 
 	if (!netdev_uses_dsa(dev))
-		return fallback(dev, skb, NULL);
+		return netdev_pick_tx(dev, skb, NULL);
 
 	/* DSA tagging layer will have configured the correct queue */
 	q = BRCM_TAG_GET_QUEUE(queue);
@@ -2297,7 +2248,7 @@ static u16 bcm_sysport_select_queue(struct net_device *dev, struct sk_buff *skb,
 	tx_ring = priv->ring_map[q + port * priv->per_port_num_tx_queues];
 
 	if (unlikely(!tx_ring))
-		return fallback(dev, skb, NULL);
+		return netdev_pick_tx(dev, skb, NULL);
 
 	return tx_ring->index;
 }
@@ -2554,7 +2505,7 @@ static int bcm_sysport_probe(struct platform_device *pdev)
 
 	/* Initialize netdevice members */
 	macaddr = of_get_mac_address(dn);
-	if (!macaddr || !is_valid_ether_addr(macaddr)) {
+	if (IS_ERR(macaddr)) {
 		dev_warn(&pdev->dev, "using random Ethernet MAC\n");
 		eth_hw_addr_random(dev);
 	} else {
@@ -2605,11 +2556,11 @@ static int bcm_sysport_probe(struct platform_device *pdev)
 
 	priv->rev = topctrl_readl(priv, REV_CNTL) & REV_MASK;
 	dev_info(&pdev->dev,
-		 "Broadcom SYSTEMPORT%s" REV_FMT
-		 " at 0x%p (irqs: %d, %d, TXQs: %d, RXQs: %d)\n",
+		 "Broadcom SYSTEMPORT%s " REV_FMT
+		 " (irqs: %d, %d, TXQs: %d, RXQs: %d)\n",
 		 priv->is_lite ? " Lite" : "",
 		 (priv->rev >> 8) & 0xff, priv->rev & 0xff,
-		 priv->base, priv->irq0, priv->irq1, txq, rxq);
+		 priv->irq0, priv->irq1, txq, rxq);
 
 	return 0;
 
@@ -2649,13 +2600,18 @@ static int bcm_sysport_suspend_to_wol(struct bcm_sysport_priv *priv)
 	unsigned int index, i = 0;
 	u32 reg;
 
-	/* Password has already been programmed */
 	reg = umac_readl(priv, UMAC_MPD_CTRL);
 	if (priv->wolopts & (WAKE_MAGIC | WAKE_MAGICSECURE))
 		reg |= MPD_EN;
 	reg &= ~PSW_EN;
-	if (priv->wolopts & WAKE_MAGICSECURE)
+	if (priv->wolopts & WAKE_MAGICSECURE) {
+		/* Program the SecureOn password */
+		umac_writel(priv, get_unaligned_be16(&priv->sopass[0]),
+			    UMAC_PSW_MS);
+		umac_writel(priv, get_unaligned_be32(&priv->sopass[2]),
+			    UMAC_PSW_LS);
 		reg |= PSW_EN;
+	}
 	umac_writel(priv, reg, UMAC_MPD_CTRL);
 
 	if (priv->wolopts & WAKE_FILTER) {

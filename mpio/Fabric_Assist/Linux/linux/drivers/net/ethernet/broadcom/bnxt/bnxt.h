@@ -22,7 +22,6 @@
 #include <linux/rhashtable.h>
 #include <net/devlink.h>
 #include <net/dst_metadata.h>
-#include <net/switchdev.h>
 #include <net/xdp.h>
 #include <linux/net_dim.h>
 
@@ -582,7 +581,7 @@ struct nqe_cn {
 	(HWRM_SHORT_TIMEOUT_COUNTER * HWRM_SHORT_MIN_TIMEOUT +		\
 	 ((n) - HWRM_SHORT_TIMEOUT_COUNTER) * HWRM_MIN_TIMEOUT))
 
-#define HWRM_VALID_BIT_DELAY_USEC	20
+#define HWRM_VALID_BIT_DELAY_USEC	150
 
 #define BNXT_HWRM_CHNL_CHIMP	0
 #define BNXT_HWRM_CHNL_KONG	1
@@ -946,6 +945,7 @@ struct bnxt_vf_info {
 					 * stored by PF.
 					 */
 	u16	vlan;
+	u16	func_qcfg_flags;
 	u32	flags;
 #define BNXT_VF_QOS		0x1
 #define BNXT_VF_SPOOFCHK	0x2
@@ -1227,6 +1227,7 @@ struct bnxt_ctx_mem_info {
 	u16	mrav_entry_size;
 	u16	tim_entry_size;
 	u32	tim_max_entries;
+	u16	mrav_num_entries_units;
 	u8	tqm_entries_multiple;
 
 	u32	flags;
@@ -1354,6 +1355,7 @@ struct bnxt {
 	#define BNXT_FLAG_DIM		0x2000000
 	#define BNXT_FLAG_ROCE_MIRROR_CAP	0x4000000
 	#define BNXT_FLAG_PORT_STATS_EXT	0x10000000
+	#define BNXT_FLAG_PCIE_STATS	0x40000000
 
 	#define BNXT_FLAG_ALL_CONFIG_FEATS (BNXT_FLAG_TPA |		\
 					    BNXT_FLAG_RFS |		\
@@ -1479,6 +1481,12 @@ struct bnxt {
 	#define BNXT_FW_CAP_IF_CHANGE			0x00000010
 	#define BNXT_FW_CAP_KONG_MB_CHNL		0x00000080
 	#define BNXT_FW_CAP_OVS_64BIT_HANDLE		0x00000400
+	#define BNXT_FW_CAP_TRUSTED_VF			0x00000800
+	#define BNXT_FW_CAP_PKG_VER			0x00004000
+	#define BNXT_FW_CAP_CFA_ADV_FLOW		0x00008000
+	#define BNXT_FW_CAP_CFA_RFS_RING_TBL_IDX	0x00010000
+	#define BNXT_FW_CAP_PCIE_STATS_SUPPORTED	0x00020000
+	#define BNXT_FW_CAP_EXT_STATS_SUPPORTED		0x00040000
 
 #define BNXT_NEW_RM(bp)		((bp)->fw_cap & BNXT_FW_CAP_NEW_RM)
 	u32			hwrm_spec_code;
@@ -1497,10 +1505,12 @@ struct bnxt {
 	struct tx_port_stats	*hw_tx_port_stats;
 	struct rx_port_stats_ext	*hw_rx_port_stats_ext;
 	struct tx_port_stats_ext	*hw_tx_port_stats_ext;
+	struct pcie_ctx_hw_stats	*hw_pcie_stats;
 	dma_addr_t		hw_rx_port_stats_map;
 	dma_addr_t		hw_tx_port_stats_map;
 	dma_addr_t		hw_rx_port_stats_ext_map;
 	dma_addr_t		hw_tx_port_stats_ext_map;
+	dma_addr_t		hw_pcie_stats_map;
 	int			hw_port_stats_size;
 	u16			fw_rx_stats_ext_size;
 	u16			fw_tx_stats_ext_size;
@@ -1609,6 +1619,7 @@ struct bnxt {
 
 	/* devlink interface and vf-rep structs */
 	struct devlink		*dl;
+	struct devlink_port	dl_port;
 	enum devlink_eswitch_mode eswitch_mode;
 	struct bnxt_vf_rep	**vf_reps; /* array of vf-rep ptrs */
 	u16			*cfa_code_map; /* cfa_code -> vf_idx map */
@@ -1631,6 +1642,9 @@ struct bnxt {
 
 #define BNXT_TX_STATS_EXT_OFFSET(counter)		\
 	(offsetof(struct tx_port_stats_ext, counter) / 8)
+
+#define BNXT_PCIE_STATS_OFFSET(counter)			\
+	(offsetof(struct pcie_ctx_hw_stats, counter) / 8)
 
 #define I2C_DEV_ADDR_A0				0xa0
 #define I2C_DEV_ADDR_A2				0xa2
@@ -1794,7 +1808,8 @@ int bnxt_check_rings(struct bnxt *bp, int tx, int rx, bool sh, int tcs,
 int bnxt_setup_mq_tc(struct net_device *dev, u8 tc);
 int bnxt_get_max_rings(struct bnxt *, int *, int *, bool);
 int bnxt_restore_pf_fw_resources(struct bnxt *bp);
-int bnxt_port_attr_get(struct bnxt *bp, struct switchdev_attr *attr);
+int bnxt_get_port_parent_id(struct net_device *dev,
+			    struct netdev_phys_item_id *ppid);
 void bnxt_dim_work(struct work_struct *work);
 int bnxt_hwrm_set_ring_coal(struct bnxt *bp, struct bnxt_napi *bnapi);
 

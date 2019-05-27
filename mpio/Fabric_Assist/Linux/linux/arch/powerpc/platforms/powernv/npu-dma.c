@@ -28,10 +28,6 @@
  */
 static DEFINE_SPINLOCK(npu_context_lock);
 
-/*
- * Other types of TCE cache invalidation are not functional in the
- * hardware.
- */
 static struct pci_dev *get_pci_dev(struct device_node *dn)
 {
 	struct pci_dn *pdn = PCI_DN(dn);
@@ -220,7 +216,7 @@ static void pnv_npu_dma_set_32(struct pnv_ioda_pe *npe)
 	 * their parent device so drivers shouldn't be doing DMA
 	 * operations directly on these devices.
 	 */
-	set_dma_ops(&npe->pdev->dev, NULL);
+	set_dma_ops(&npe->pdev->dev, &dma_dummy_ops);
 }
 
 /*
@@ -564,7 +560,7 @@ struct iommu_table_group *pnv_try_setup_npu_table_group(struct pnv_ioda_pe *pe)
 		}
 	} else {
 		/* Create a group for 1 GPU and attached NPUs for POWER8 */
-		pe->npucomp = kzalloc(sizeof(pe->npucomp), GFP_KERNEL);
+		pe->npucomp = kzalloc(sizeof(*pe->npucomp), GFP_KERNEL);
 		table_group = &pe->npucomp->table_group;
 		table_group->ops = &pnv_npu_peers_ops;
 		iommu_register_group(table_group, hose->global_number,
@@ -917,15 +913,6 @@ static void pnv_npu2_mn_release(struct mmu_notifier *mn,
 	mmio_invalidate(npu_context, 0, ~0UL);
 }
 
-static void pnv_npu2_mn_change_pte(struct mmu_notifier *mn,
-				struct mm_struct *mm,
-				unsigned long address,
-				pte_t pte)
-{
-	struct npu_context *npu_context = mn_to_npu_context(mn);
-	mmio_invalidate(npu_context, address, PAGE_SIZE);
-}
-
 static void pnv_npu2_mn_invalidate_range(struct mmu_notifier *mn,
 					struct mm_struct *mm,
 					unsigned long start, unsigned long end)
@@ -936,7 +923,6 @@ static void pnv_npu2_mn_invalidate_range(struct mmu_notifier *mn,
 
 static const struct mmu_notifier_ops nv_nmmu_notifier_ops = {
 	.release = pnv_npu2_mn_release,
-	.change_pte = pnv_npu2_mn_change_pte,
 	.invalidate_range = pnv_npu2_mn_invalidate_range,
 };
 
@@ -1227,9 +1213,8 @@ int pnv_npu2_map_lpar_dev(struct pci_dev *gpdev, unsigned int lparid,
 	 * Currently we only support radix and non-zero LPCR only makes sense
 	 * for hash tables so skiboot expects the LPCR parameter to be a zero.
 	 */
-	ret = opal_npu_map_lpar(nphb->opal_id,
-			PCI_DEVID(gpdev->bus->number, gpdev->devfn), lparid,
-			0 /* LPCR bits */);
+	ret = opal_npu_map_lpar(nphb->opal_id, pci_dev_id(gpdev), lparid,
+				0 /* LPCR bits */);
 	if (ret) {
 		dev_err(&gpdev->dev, "Error %d mapping device to LPAR\n", ret);
 		return ret;
@@ -1238,7 +1223,7 @@ int pnv_npu2_map_lpar_dev(struct pci_dev *gpdev, unsigned int lparid,
 	dev_dbg(&gpdev->dev, "init context opalid=%llu msr=%lx\n",
 			nphb->opal_id, msr);
 	ret = opal_npu_init_context(nphb->opal_id, 0/*__unused*/, msr,
-			PCI_DEVID(gpdev->bus->number, gpdev->devfn));
+				    pci_dev_id(gpdev));
 	if (ret < 0)
 		dev_err(&gpdev->dev, "Failed to init context: %d\n", ret);
 	else
@@ -1272,7 +1257,7 @@ int pnv_npu2_unmap_lpar_dev(struct pci_dev *gpdev)
 	dev_dbg(&gpdev->dev, "destroy context opalid=%llu\n",
 			nphb->opal_id);
 	ret = opal_npu_destroy_context(nphb->opal_id, 0/*__unused*/,
-			PCI_DEVID(gpdev->bus->number, gpdev->devfn));
+				       pci_dev_id(gpdev));
 	if (ret < 0) {
 		dev_err(&gpdev->dev, "Failed to destroy context: %d\n", ret);
 		return ret;
@@ -1280,9 +1265,8 @@ int pnv_npu2_unmap_lpar_dev(struct pci_dev *gpdev)
 
 	/* Set LPID to 0 anyway, just to be safe */
 	dev_dbg(&gpdev->dev, "Map LPAR opalid=%llu lparid=0\n", nphb->opal_id);
-	ret = opal_npu_map_lpar(nphb->opal_id,
-			PCI_DEVID(gpdev->bus->number, gpdev->devfn), 0 /*LPID*/,
-			0 /* LPCR bits */);
+	ret = opal_npu_map_lpar(nphb->opal_id, pci_dev_id(gpdev), 0 /*LPID*/,
+				0 /* LPCR bits */);
 	if (ret)
 		dev_err(&gpdev->dev, "Error %d mapping device to LPAR\n", ret);
 

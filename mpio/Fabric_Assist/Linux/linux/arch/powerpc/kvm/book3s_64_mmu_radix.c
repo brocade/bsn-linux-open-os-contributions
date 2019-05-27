@@ -33,8 +33,8 @@ unsigned long __kvmhv_copy_tofrom_guest_radix(int lpid, int pid,
 					      gva_t eaddr, void *to, void *from,
 					      unsigned long n)
 {
+	int uninitialized_var(old_pid), old_lpid;
 	unsigned long quadrant, ret = n;
-	int old_pid, old_lpid;
 	bool is_load = !!to;
 
 	/* Can't access quadrants 1 or 2 in non-HV mode, call the HV to do it */
@@ -403,8 +403,13 @@ void kvmppc_unmap_pte(struct kvm *kvm, pte_t *pte, unsigned long gpa,
 		if (!memslot)
 			return;
 	}
-	if (shift)
+	if (shift) { /* 1GB or 2MB page */
 		page_size = 1ul << shift;
+		if (shift == PMD_SHIFT)
+			kvm->stat.num_2M_pages--;
+		else if (shift == PUD_SHIFT)
+			kvm->stat.num_1G_pages--;
+	}
 
 	gpa &= ~(page_size - 1);
 	hpa = old & PTE_RPN_MASK;
@@ -876,6 +881,14 @@ int kvmppc_book3s_instantiate_page(struct kvm_vcpu *vcpu,
 		if (!ret && (pte_val(pte) & _PAGE_WRITE))
 			set_page_dirty_lock(page);
 		put_page(page);
+	}
+
+	/* Increment number of large pages if we (successfully) inserted one */
+	if (!ret) {
+		if (level == 1)
+			kvm->stat.num_2M_pages++;
+		else if (level == 2)
+			kvm->stat.num_1G_pages++;
 	}
 
 	return ret;

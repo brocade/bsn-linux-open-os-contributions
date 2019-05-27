@@ -193,7 +193,7 @@ static int get_log_header(struct gfs2_jdesc *jd, unsigned int blk,
  * Returns: errno
  */
 
-static int foreach_descriptor(struct gfs2_jdesc *jd, unsigned int start,
+static int foreach_descriptor(struct gfs2_jdesc *jd, u32 start,
 			      unsigned int end, int pass)
 {
 	struct gfs2_sbd *sdp = GFS2_SB(jd->jd_inode);
@@ -263,10 +263,12 @@ static void clean_journal(struct gfs2_jdesc *jd,
 			  struct gfs2_log_header_host *head)
 {
 	struct gfs2_sbd *sdp = GFS2_SB(jd->jd_inode);
+	u32 lblock = head->lh_blkno;
 
-	sdp->sd_log_flush_head = head->lh_blkno;
-	gfs2_replay_incr_blk(jd, &sdp->sd_log_flush_head);
-	gfs2_write_log_header(sdp, jd, head->lh_sequence + 1, 0,
+	gfs2_replay_incr_blk(jd, &lblock);
+	if (jd->jd_jid == sdp->sd_lockstruct.ls_jid)
+		sdp->sd_log_flush_head = lblock;
+	gfs2_write_log_header(sdp, jd, head->lh_sequence + 1, 0, lblock,
 			      GFS2_LOG_HEAD_UNMOUNT | GFS2_LOG_HEAD_RECOVERY,
 			      REQ_PREFLUSH | REQ_FUA | REQ_META | REQ_SYNC);
 }
@@ -344,7 +346,7 @@ void gfs2_recover_func(struct work_struct *work)
 	if (error)
 		goto fail_gunlock_ji;
 
-	error = gfs2_find_jhead(jd, &head);
+	error = gfs2_find_jhead(jd, &head, true);
 	if (error)
 		goto fail_gunlock_ji;
 	t_jhd = ktime_get();

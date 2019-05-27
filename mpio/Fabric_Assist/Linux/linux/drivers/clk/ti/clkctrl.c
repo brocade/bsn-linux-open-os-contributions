@@ -276,7 +276,7 @@ _ti_clkctrl_clk_register(struct omap_clkctrl_provider *provider,
 	init.parent_names = parents;
 	init.num_parents = num_parents;
 	init.ops = ops;
-	init.flags = CLK_IS_BASIC;
+	init.flags = 0;
 
 	clk = ti_clk_register(NULL, clk_hw, init.name);
 	if (IS_ERR_OR_NULL(clk)) {
@@ -446,6 +446,7 @@ static void __init _ti_omap4_clkctrl_setup(struct device_node *node)
 	u32 addr;
 	int ret;
 	char *c;
+	u16 soc_mask = 0;
 
 	if (!(ti_clk_get_features()->flags & TI_CLK_CLKCTRL_COMPAT) &&
 	    of_node_name_eq(node, "clk"))
@@ -469,6 +470,13 @@ static void __init _ti_omap4_clkctrl_setup(struct device_node *node)
 		else
 			data = dra7_clkctrl_data;
 	}
+
+	if (of_machine_is_compatible("ti,dra72"))
+		soc_mask = CLKF_SOC_DRA72;
+	if (of_machine_is_compatible("ti,dra74"))
+		soc_mask = CLKF_SOC_DRA74;
+	if (of_machine_is_compatible("ti,dra76"))
+		soc_mask = CLKF_SOC_DRA76;
 #endif
 #ifdef CONFIG_SOC_AM33XX
 	if (of_machine_is_compatible("ti,am33xx")) {
@@ -501,6 +509,9 @@ static void __init _ti_omap4_clkctrl_setup(struct device_node *node)
 		data = dm816_clkctrl_data;
 #endif
 
+	if (ti_clk_get_features()->flags & TI_CLK_DEVICE_TYPE_GP)
+		soc_mask |= CLKF_SOC_NONSEC;
+
 	while (data->addr) {
 		if (addr == data->addr)
 			break;
@@ -530,7 +541,7 @@ static void __init _ti_omap4_clkctrl_setup(struct device_node *node)
 		 * Create default clkdm name, replace _cm from end of parent
 		 * node name with _clkdm
 		 */
-		provider->clkdm_name[strlen(provider->clkdm_name) - 5] = 0;
+		provider->clkdm_name[strlen(provider->clkdm_name) - 2] = 0;
 	} else {
 		provider->clkdm_name = kasprintf(GFP_KERNEL, "%pOFn", node);
 		if (!provider->clkdm_name) {
@@ -562,6 +573,12 @@ static void __init _ti_omap4_clkctrl_setup(struct device_node *node)
 	reg_data = data->regs;
 
 	while (reg_data->parent) {
+		if ((reg_data->flags & CLKF_SOC_MASK) &&
+		    (reg_data->flags & soc_mask) == 0) {
+			reg_data++;
+			continue;
+		}
+
 		hw = kzalloc(sizeof(*hw), GFP_KERNEL);
 		if (!hw)
 			return;
