@@ -661,8 +661,6 @@ struct fc_function_template {
 
 	void	(*set_vport_symbolic_name)(struct fc_vport *);
 	int  	(*vport_create)(struct fc_vport *, bool);
-	int	(*abort_outstanding_io)(struct Scsi_Host *shost,
-				struct fc_fpin_port_identifier *port_ident);
 	int	(*vport_disable)(struct fc_vport *, bool);
 	int  	(*vport_delete)(struct fc_vport *);
 
@@ -804,17 +802,10 @@ u32 fc_get_event_number(void);
 void fc_host_post_event(struct Scsi_Host *shost, u32 event_number,
 		enum fc_host_event_code event_code, u32 event_data);
 void fc_host_post_vendor_event(struct Scsi_Host *shost, u32 event_number,
-<<<<<<< HEAD
-		u32 data_len, char * data_buf, u64 vendor_id);
-void fc_host_post_fpin_event(struct Scsi_Host *shost, u32 event_number,
-		enum fc_host_event_code event_code, u32 data_len,
-		char *data_buf);
-=======
 		u32 data_len, char *data_buf, u64 vendor_id);
 void fc_host_post_fc_event(struct Scsi_Host *shost, u32 event_number,
 		enum fc_host_event_code event_code,
 		u32 data_len, char *data_buf, u64 vendor_id);
->>>>>>> cd6c84d8f0cdc911df435bb075ba22ce3c605b07
 	/* Note: when specifying vendor_id to fc_host_post_vendor_event()
 	 *   or fc_host_post_fc_event(), be sure to read the Vendor Type
 	 *   and ID formatting requirements specified in scsi_netlink.h

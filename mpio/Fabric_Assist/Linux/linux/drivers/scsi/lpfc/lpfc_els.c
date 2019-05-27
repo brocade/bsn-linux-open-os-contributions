@@ -55,12 +55,6 @@ static int lpfc_issue_fabric_iocb(struct lpfc_hba *phba,
 				  struct lpfc_iocbq *iocb);
 
 static int lpfc_max_els_tries = 3;
-#define FC_PAYLOAD_MAXLEN 2048
-typedef struct fpin_payload {
-	uint64_t hba_wwn;
-	uint32_t length; //2048 for now
-	char payload[FC_PAYLOAD_MAXLEN];
-} fpin_payload_t;
 
 /**
  * lpfc_els_chk_latt - Check host link attention event for a vport
@@ -8095,14 +8089,8 @@ lpfc_els_unsol_buffer(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 	struct lpfc_nodelist *ndlp;
 	struct ls_rjt stat;
 	uint32_t *payload;
-	uint64_t wwpn;
 	uint32_t cmd, did, newnode;
-<<<<<<< HEAD
-	uint8_t rjt_exp, rjt_err = 0;
-	pin_payload_t *fpin_st;
-=======
 	uint8_t rjt_exp, rjt_err = 0, init_link = 0;
->>>>>>> cd6c84d8f0cdc911df435bb075ba22ce3c605b07
 	IOCB_t *icmd = &elsiocb->iocb;
 	LPFC_MBOXQ_t *mbox;
 
@@ -8466,29 +8454,12 @@ lpfc_els_unsol_buffer(struct lpfc_hba *phba, struct lpfc_sli_ring *pring,
 		rjt_exp = LSEXP_INVALID_OX_RX;
 		break;
 	case ELS_CMD_FPIN:
-<<<<<<< HEAD
-		 /*post the fpin as a fc transport event*/
-		memcpy(&wwpn, &phba->wwpn, sizeof(wwpn));
-		fc_add_fpin_phba_list(wwpn, phba);
-		fpin_st = kmalloc(sizeof(fpin_payload_t), GFP_KERNEL);
-		if (fpin_st) {
-			fpin_st->hba_wwn = wwpn;
-			fpin_st->length = FC_PAYLOAD_MAXLEN;
-			memcpy(fpin_st->payload, payload, FC_PAYLOAD_MAXLEN);
-			fc_host_post_fpin_event(shost, fc_get_event_number(),
-					FCH_EVT_LINK_FPIN_LINK_INTEG, sizeof(fpin_payload_t),
-					(char *)fpin_st);
-			kfree(fpin_st);
-			fpin_st = NULL;
-		}
-=======
 		/*
 		 * Received FPIN from fabric - pass it to the
 		 * transport FPIN handler.
 		 */
 		fc_host_fpin_rcv(shost, elsiocb->iocb.unsli3.rcvsli3.acc_len,
 				(char *)payload);
->>>>>>> cd6c84d8f0cdc911df435bb075ba22ce3c605b07
 		break;
 	default:
 		lpfc_debugfs_disc_trc(vport, LPFC_DISC_TRC_ELS_UNSOL,

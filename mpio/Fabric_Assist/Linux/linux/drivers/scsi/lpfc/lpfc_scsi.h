@@ -144,12 +144,6 @@ struct lpfc_scsicmd_bkt {
 
 #define TXRDY_PAYLOAD_LEN	12
 
-<<<<<<< HEAD
-int lpfc_sli4_scmd_to_wqidx_distr(struct lpfc_hba *phba,
-				  struct lpfc_scsi_buf *lpfc_cmd);
-extern int fc_add_fpin_phba_list (uint64_t wwpn, struct lpfc_hba *phba);
-=======
 /* For sysfs/debugfs tmp string max len */
 #define LPFC_MAX_SCSI_INFO_TMP_LEN	79
 
->>>>>>> cd6c84d8f0cdc911df435bb075ba22ce3c605b07

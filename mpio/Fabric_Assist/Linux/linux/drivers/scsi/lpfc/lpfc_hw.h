@@ -646,11 +646,7 @@ struct fc_vft_header {
 #define ELS_CMD_RNID      0x78
 #define ELS_CMD_LIRR      0x7A
 #define ELS_CMD_LCB	  0x81
-<<<<<<< HEAD
-#define ELS_CMD_FPIN	  0x16
-=======
 #define ELS_CMD_FPIN	  ELS_FPIN
->>>>>>> cd6c84d8f0cdc911df435bb075ba22ce3c605b07
 #endif
 
 /*
