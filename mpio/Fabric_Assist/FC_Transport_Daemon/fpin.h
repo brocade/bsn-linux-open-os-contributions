@@ -43,7 +43,7 @@
 
 /* Linked List to store sd and dm mapping */
 #define DM_PARAMS_SIZE	4096
-#define CMD_LEN			128
+#define CMD_LEN			192
 #define DEV_NAME_LEN	128
 #define TGT_NAME_LEN	64
 #define DEV_NODE_LEN	32

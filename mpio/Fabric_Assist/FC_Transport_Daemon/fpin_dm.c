@@ -34,7 +34,7 @@ pthread_mutex_t fpin_li_marginal_dev_mutex = PTHREAD_MUTEX_INITIALIZER;
 /*
  * Function:
  * 	fpin_insert_dm(struct list_head *dm_list_head, char *dm_name,
- * 			char *dm_node, char *uid_name)
+ * 			char *uid_name)
  *
  * Inputs:
  * 	1. Pointer to the Linked list head containing dm name and node.
@@ -59,7 +59,7 @@ fpin_insert_dm(struct list_head *dm_list_head, const char *dm_name,
 	if ((dm_name_len > (DEV_NAME_LEN - 1)) ||
 		(uid_name_len > (UUID_LEN -1 ))) {
 		FPIN_ELOG("Failed to add %s, params exceed buffer length "
-		"dm_name %d, dm_node %d, uid_name %d\n", dm_name,
+		"dm_name %d, uid_name %d\n", dm_name,
 			dm_name_len, uid_name_len);
 		return (-EINVAL);
 	}
@@ -340,7 +340,10 @@ int send_packet(int fd, const char *buf)
         return 0;
 }
 
-static int _recv_packet(int fd, char **buf, unsigned int timeout, ssize_t limit)
+/*
+ * receive a packet in length prefix format
+ */
+int recv_packet(int fd, char **buf, unsigned int timeout)
 {
         int err = 0;
         ssize_t len = 0;
@@ -351,8 +354,6 @@ static int _recv_packet(int fd, char **buf, unsigned int timeout, ssize_t limit)
                 return len;
         if (len < 0)
                 return -errno;
-        if ((limit > 0) && (len > limit))
-                return -EINVAL;
         (*buf) = malloc(len);
         if (!*buf)
                 return -ENOMEM;
@@ -363,14 +364,6 @@ static int _recv_packet(int fd, char **buf, unsigned int timeout, ssize_t limit)
                 return -errno;
         }
         return err;
-}
-
-/*
- * receive a packet in length prefix format
- */
-int recv_packet(int fd, char **buf, unsigned int timeout)
-{
-        return _recv_packet(fd, buf, timeout, 0 /* no limit */);
 }
 
 
@@ -431,7 +424,7 @@ fpin_dm_fail_path(struct list_head *dm_list_head,
 				 * Fail the impacted Path in DM
 				 */
 				FPIN_ILOG("Failing %s:%s\n", temp->dev_node, temp->dev_name);
-				snprintf(cmd, (CMD_LEN - 1), "fail path %s", temp->dev_name);
+				snprintf(cmd, CMD_LEN, "fail path %s", temp->dev_name);
 				if ((ret = send_packet(fd, cmd)) != 0) {
 					FPIN_ELOG("send_packet failed with %d\n", ret);
 					continue;
@@ -439,14 +432,24 @@ fpin_dm_fail_path(struct list_head *dm_list_head,
 				FPIN_ELOG("CMD %s\n", cmd);
 				ret = recv_packet(fd, &reply, 100);
 				if (ret < 0) {
-					if (ret == -ETIMEDOUT)
+					if (ret == -ETIMEDOUT) {
 						FPIN_ELOG("timeout receiving packet\n");
-					else
+					} else {
 						FPIN_ELOG("error %d receiving packet\n", ret);
+					}
 					return;
 				} else {
-					FPIN_DLOG("%s", reply);
-					free(reply);
+					if (reply) {
+						if (strncmp(reply,"ok\n", 3) == 0) {
+							FPIN_ILOG("Successfully failed %s:%s\n",
+								temp->dev_node, temp->dev_name);
+						} else if ((strncmp(reply, "fail\n", 5) == 0) ||
+								(strncmp(reply, "timeout\n", 8) == 0)) {
+							FPIN_CLOG("Unable to fail %s:%s, reason %s\n",
+								temp->dev_node, temp->dev_name, reply);
+						}
+						free(reply);
+					}
 				}
 			} else {
 				FPIN_ELOG("Not Failing %s, not enough Active paths\n",
