@@ -15,13 +15,8 @@ Prerequisites
 		to host.
 
 Usage:
-	Once HBA driver is installed, it exposes a fctxp device which is used by the
-daemon to receive FPIN-LI notifications. This daemon cannot be launched without
-HBA driver support. 
-
-	Currently, the daemon suports only the marginal path failover. The FPIN-LI
-ELS structure is yet to be finalized and hence a temporary beacon ELS frame is
-used as a POC to test the feature.
+	This daemon cannot be launched without HBA driver support.
+	Currently, the daemon suports only the marginal path failover.
 
 Steps performed during daemon execution:
 1.	The FC networking switch sends an FPIN-LI ELS frame,
@@ -48,11 +43,8 @@ Steps performed during daemon execution:
 	point 4, is parsed to get the sd* and dm-* information. A list of sd* which
 	are to be failed is populated here. 
 
-7.	Finally, the list populated above is used to fail the path using multipathd
-	command line interface.
-
-To Be Done: (Used as TBD in code)
-1.	Daemon startup sequence. To be worked with Redhat.
+7.	Finally, the list populated above is used to fail the path using multipath
+	libraries.
 
 Steps to compile:
 Please install udev,pthread ,devmapper libraries before we start compiling.

@@ -345,25 +345,10 @@ int send_packet(int fd, const char *buf)
  */
 int recv_packet(int fd, char **buf, unsigned int timeout)
 {
-        int err = 0;
-        ssize_t len = 0;
-
-        *buf = NULL;
-        len = mpath_recv_reply_len(fd, timeout);
-        if (len == 0)
-                return len;
-        if (len < 0)
-                return -errno;
-        (*buf) = malloc(len);
-        if (!*buf)
-                return -ENOMEM;
-        err = mpath_recv_reply_data(fd, *buf, len, timeout);
-        if (err != 0) {
-                free(*buf);
-                (*buf) = NULL;
-                return -errno;
-        }
-        return err;
+	int ret = mpath_recv_reply(fd, buf, timeout);
+	if (ret != 0)
+		return -errno;
+	return 0;
 }
 
 
@@ -439,17 +424,15 @@ fpin_dm_fail_path(struct list_head *dm_list_head,
 					}
 					return;
 				} else {
-					if (reply) {
-						if (strncmp(reply,"ok\n", 3) == 0) {
-							FPIN_ILOG("Successfully failed %s:%s\n",
-								temp->dev_node, temp->dev_name);
-						} else if ((strncmp(reply, "fail\n", 5) == 0) ||
-								(strncmp(reply, "timeout\n", 8) == 0)) {
-							FPIN_CLOG("Unable to fail %s:%s, reason %s\n",
-								temp->dev_node, temp->dev_name, reply);
-						}
-						free(reply);
+					if (strncmp(reply,"ok\n", 3) == 0) {
+						FPIN_ILOG("Successfully failed %s:%s\n",
+							temp->dev_node, temp->dev_name);
+					} else if ((strncmp(reply, "fail\n", 5) == 0) ||
+							(strncmp(reply, "timeout\n", 8) == 0)) {
+						FPIN_CLOG("Unable to fail %s:%s, reason %s",
+							temp->dev_node, temp->dev_name, reply);
 					}
+					free(reply);
 				}
 			} else {
 				FPIN_ELOG("Not Failing %s, not enough Active paths\n",
